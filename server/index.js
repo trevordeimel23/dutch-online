@@ -196,6 +196,20 @@ function completeTurnAction(room, roomId, playerId) {
   }
 }
 
+// The card a player is currently holding (drawn, not yet placed). Only face-up if it came from the discard pile.
+function publicDrawnCard(g) {
+  if (!g?.pendingDraw) return null;
+  for (const [playerId, pd] of g.pendingDraw) {
+    if (pd) return { playerId, source: pd.source, card: pd.source === "DISCARD" ? pd.card : null };
+  }
+  return null;
+}
+
+// Public, card-free description of what just happened at the table (drives highlights on every client)
+function emitTable(roomId, event) {
+  io.to(roomId).emit("table:event", event);
+}
+
 function publicRoomView(room) {
   const g = room.game;
   const base = {
@@ -209,6 +223,9 @@ function publicRoomView(room) {
     turnPlayerId: g?.phase === "PLAY" ? room.players[g.turnIndex]?.id ?? null : null,
     pendingEffect: g?.pendingEffect ?? null,
     revealHold: g?.revealHold ?? null,
+    handSizes: Object.fromEntries(room.players.map((p) => [p.id, g?.hands?.get(p.id)?.length ?? 0])),
+    reorders: g?.reorders ?? {},
+    drawn: publicDrawnCard(g),
     dutchCallerId: g?.dutchCallerId ?? null,
     dutchTurnsLeft: g?.dutchTurnsLeft ?? null,
     dutchWindowPlayerId: g?.dutchWindowPlayerId ?? null,
@@ -312,6 +329,7 @@ function freshGameState(room, lookCount) {
     hasPeeked,
     pendingDraw,
     pendingEffect: null,
+    reorders: {}, // playerId -> times they rearranged their hand this round
     matchEffects: {}, // playerId -> queue of effect types earned by matching out of turn
     peekRevealFor: {},
     dutchCallerId: null,
@@ -458,6 +476,36 @@ io.on("connection", (socket) => {
     } catch (e) { emitError(socket.id, e.message); }
   });
 
+  // Move one of your own cards to a new slot (like rearranging cards on the table).
+  // Hand and known-card memory are permuted together so slot numbers stay the same for everyone.
+  socket.on("hand:reorder", ({ roomId, from, to }) => {
+    try {
+      const room = getRoomOrThrow(roomId);
+      const g = room.game;
+      if (!g || g.phase !== "PLAY") return;
+      if (g.dutchCallerId === socket.id) { emitError(socket.id, "You can't rearrange your cards after calling Dutch."); return; }
+      const hand = g.hands.get(socket.id);
+      const f = Number(from), t = Number(to);
+      if (!hand || !Number.isInteger(f) || !Number.isInteger(t)) return;
+      if (f < 0 || t < 0 || f >= hand.length || t >= hand.length || f === t) return;
+
+      const known = g.known.get(socket.id) ?? {};
+      const entries = hand.map((card, idx) => ({ card, known: known[idx] }));
+      const [moved] = entries.splice(f, 1);
+      entries.splice(t, 0, moved);
+      g.hands.set(socket.id, entries.map((e) => e.card));
+      const newKnown = {};
+      entries.forEach((e, idx) => { if (e.known !== undefined) newKnown[idx] = e.known; });
+      g.known.set(socket.id, newKnown);
+
+      g.reorders[socket.id] = (g.reorders[socket.id] ?? 0) + 1;
+      const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
+      io.to(roomId).emit("log", `${name} rearranged their cards.`);
+      emitTable(roomId, { type: "reorder", playerId: socket.id, from: f, to: t });
+      broadcastRoom(roomId);
+    } catch (e) { emitError(socket.id, e.message); }
+  });
+
   socket.on("reveal:done", ({ roomId }) => {
     try {
       const room = getRoomOrThrow(roomId);
@@ -491,6 +539,7 @@ io.on("connection", (socket) => {
           if (!g.matchEffects[socket.id]) g.matchEffects[socket.id] = [];
           g.matchEffects[socket.id].push(effectType);
         }
+        emitTable(roomId, { type: "match", ok: true, playerId: socket.id, index: i, card: candidate });
         io.to(roomId).emit("log", `${name} MATCHED and discarded!${effectType ? ` ${rankOf(candidate)} effect!` : ""}`);
         broadcastRoom(roomId);
       } else {
@@ -498,6 +547,7 @@ io.on("connection", (socket) => {
           hand.push(g.deck.pop());
           const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
           io.to(roomId).emit("log", `${name} tried to match — wrong! Penalty card added.`);
+          emitTable(roomId, { type: "match", ok: false, playerId: socket.id, index: hand.length - 1 });
           broadcastRoom(roomId);
         } else {
           emitError(socket.id, "Wrong match. Deck empty, no penalty.");
@@ -528,6 +578,7 @@ io.on("connection", (socket) => {
 
       g.pendingDraw.set(socket.id, { card, source });
       io.to(roomId).emit("log", `${room.players[g.turnIndex].name} drew from ${source}.`);
+      emitTable(roomId, { type: "draw", playerId: socket.id, source });
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });
@@ -549,6 +600,7 @@ io.on("connection", (socket) => {
 
       const name = room.players[g.turnIndex].name;
       io.to(roomId).emit("log", `${name} discarded ${pending.card}.${wasSpecial ? ` ${rankOf(pending.card)} effect!` : ""}`);
+      emitTable(roomId, { type: "discard", playerId: socket.id, card: pending.card });
 
       if (!wasSpecial) completeTurnAction(room, roomId, socket.id);
       broadcastRoom(roomId);
@@ -583,6 +635,7 @@ io.on("connection", (socket) => {
 
       const name = room.players[g.turnIndex].name;
       io.to(roomId).emit("log", `${name} swapped into [${i}]. Discarded: ${replaced}.${wasSpecial ? ` ${rankOf(replaced)} effect!` : ""}`);
+      emitTable(roomId, { type: "swap", playerId: socket.id, index: i, card: replaced });
 
       if (!wasSpecial) completeTurnAction(room, roomId, socket.id);
       broadcastRoom(roomId);
@@ -622,6 +675,7 @@ io.on("connection", (socket) => {
       const nA = room.players.find((p) => p.id === a.playerId)?.name ?? a.playerId;
       const nB = room.players.find((p) => p.id === b.playerId)?.name ?? b.playerId;
       io.to(roomId).emit("log", `${actor} used Jack: swapped ${nA}[${ai}] and ${nB}[${bi}].`);
+      emitTable(roomId, { type: "jack", playerId: socket.id, a: { playerId: a.playerId, index: ai }, b: { playerId: b.playerId, index: bi } });
 
       finishEffect(room, roomId, socket.id, source);
       broadcastRoom(roomId);
@@ -659,6 +713,7 @@ io.on("connection", (socket) => {
       const actor = room.players.find((p) => p.id === socket.id)?.name ?? "?";
       const tName = room.players.find((p) => p.id === targetPlayerId)?.name ?? targetPlayerId;
       io.to(roomId).emit("log", `${actor} used Queen to peek a card from ${tName}.`);
+      emitTable(roomId, { type: "queen", playerId: socket.id, targetPlayerId, index: ti });
 
       if (source === "match") {
         g.matchEffects[socket.id].shift();
@@ -692,6 +747,7 @@ io.on("connection", (socket) => {
         g.hands.set(targetPlayerId, targetHand);
         const actor = room.players.find((p) => p.id === socket.id)?.name ?? "?";
         io.to(roomId).emit("log", `${actor} used Ace: ${target.name} gets a penalty card.`);
+        emitTable(roomId, { type: "ace", playerId: socket.id, targetPlayerId, index: targetHand.length - 1 });
       }
 
       finishEffect(room, roomId, socket.id, source);

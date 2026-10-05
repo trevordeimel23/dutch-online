@@ -1,149 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
-// ── Responsive helper ───────────────────────────────────────────────────────
-function useIsMobile(breakpoint = 700) {
-  const query = `(max-width: ${breakpoint}px)`;
-  const [mobile, setMobile] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    const onChange = (e) => setMobile(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [query]);
-  return mobile;
-}
-
-// ── Card display helpers ────────────────────────────────────────────────────
-
-// Normalize any suit representation to a Unicode symbol
-const SUIT_SYMBOL = {
-  s: "♠", S: "♠", spades:   "♠",
-  c: "♣", C: "♣", clubs:    "♣",
-  h: "♥", H: "♥", hearts:   "♥",
-  d: "♦", D: "♦", diamonds: "♦",
-  "♠": "♠", "♣": "♣", "♥": "♥", "♦": "♦",
-};
-
-function splitCard(card) {
-  if (!card) return { rank: "", suit: "" };
-  // Object form: { rank: "A", suit: "h" } or { rank: "A", suit: "♥" }
-  if (typeof card === "object" && card.rank !== undefined) {
-    return { rank: String(card.rank), suit: SUIT_SYMBOL[card.suit] || card.suit || "" };
-  }
-  // String form: "Ah", "A♥", "10s", etc.
-  const s = String(card);
-  // Suit could be last 1 char (symbol) or last 1 char (letter abbrev)
-  const rawSuit = s.slice(-1);
-  const rank    = s.slice(0, -1);
-  return { rank, suit: SUIT_SYMBOL[rawSuit] || rawSuit };
-}
-
-function isRed(card) {
-  const { suit } = splitCard(card);
-  return suit === "♥" || suit === "♦";
-}
-
-function cardStr(card) {
-  if (!card) return null;
-  const { rank, suit } = splitCard(card);
-  return rank + suit;
-}
-
-function CardFace({ card, size = "md", selected, onClick, label, dimmed }) {
-  const { rank, suit } = splitCard(card);
-  const red = isRed(card);
-  const mobile = useIsMobile();
-  const sizes = mobile ? {
-    sm: { width: 40, height: 56, center: 16, corner: 9 },
-    md: { width: 58, height: 82, center: 22, corner: 11 },
-    lg: { width: 72, height: 102, center: 28, corner: 12 },
-  } : {
-    sm: { width: 48, height: 68, center: 18, corner: 10 },
-    md: { width: 70, height: 98, center: 26, corner: 12 },
-    lg: { width: 88, height: 124, center: 32, corner: 14 },
-  };
-  const s = sizes[size] || sizes.md;
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        width: s.width, height: s.height,
-        background: dimmed ? "#e8e8e8" : "#fffef8",
-        border: selected ? "3px solid #ffd700" : "2px solid #bbb",
-        borderRadius: 8,
-        display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center",
-        cursor: onClick ? "pointer" : "default",
-        color: red ? "#c0392b" : "#1a1a1a",
-        boxShadow: selected
-          ? "0 0 12px #ffd700, 2px 3px 8px rgba(0,0,0,0.5)"
-          : "2px 3px 8px rgba(0,0,0,0.5)",
-        position: "relative",
-        userSelect: "none",
-        fontFamily: "Georgia, 'Times New Roman', serif",
-        flexShrink: 0,
-        opacity: dimmed ? 0.6 : 1,
-        transform: selected ? "translateY(-6px)" : "none",
-        transition: "transform 0.15s, box-shadow 0.15s",
-      }}
-    >
-      <div style={{ position: "absolute", top: 3, left: 5, fontSize: s.corner, lineHeight: 1.1, fontWeight: "bold" }}>
-        {rank}<br />{suit}
-      </div>
-      <div style={{ fontSize: s.center, lineHeight: 1 }}>{suit}</div>
-      <div style={{ position: "absolute", bottom: 3, right: 5, fontSize: s.corner, lineHeight: 1.1, fontWeight: "bold", transform: "rotate(180deg)" }}>
-        {rank}<br />{suit}
-      </div>
-      {label !== undefined && (
-        <div style={{ position: "absolute", bottom: -20, left: 0, right: 0, textAlign: "center", fontSize: 10, color: "#aed6f1", fontFamily: "sans-serif" }}>
-          #{label}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CardBack({ size = "md", selected, onClick, label }) {
-  const mobile = useIsMobile();
-  const sizes = mobile ? {
-    sm: { width: 40, height: 56 },
-    md: { width: 58, height: 82 },
-    lg: { width: 72, height: 102 },
-  } : {
-    sm: { width: 48, height: 68 },
-    md: { width: 70, height: 98 },
-    lg: { width: 88, height: 124 },
-  };
-  const s = sizes[size] || sizes.md;
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        width: s.width, height: s.height,
-        background: "repeating-linear-gradient(45deg, #1a237e, #1a237e 4px, #283593 4px, #283593 8px)",
-        border: selected ? "3px solid #ffd700" : "2px solid #555",
-        borderRadius: 8,
-        cursor: onClick ? "pointer" : "default",
-        boxShadow: selected
-          ? "0 0 12px #ffd700, 2px 3px 8px rgba(0,0,0,0.5)"
-          : "2px 3px 8px rgba(0,0,0,0.5)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        position: "relative",
-        flexShrink: 0,
-        transform: selected ? "translateY(-6px)" : "none",
-        transition: "transform 0.15s",
-      }}
-    >
-      <div style={{ width: "76%", height: "80%", border: "2px solid rgba(255,255,255,0.25)", borderRadius: 4 }} />
-      {label !== undefined && (
-        <div style={{ position: "absolute", bottom: -20, left: 0, right: 0, textAlign: "center", fontSize: 10, color: "#aed6f1", fontFamily: "sans-serif" }}>
-          #{label}
-        </div>
-      )}
-    </div>
-  );
-}
+import { useIsMobile, CardFace, CardBack } from "./cards.jsx";
+import Table from "./Table.jsx";
 
 // ── Reusable styled components ──────────────────────────────────────────────
 
@@ -225,12 +84,17 @@ export default function App() {
   const [queenTarget, setQueenTarget] = useState({ playerId: "", index: 0 });
   const [aceTarget, setAceTarget]   = useState("");
 
-  // 15-second card visibility timer
-  const [visibleKnown, setVisibleKnown]   = useState({});
-  const [peekTimeLeft, setPeekTimeLeft]   = useState(0);
+  // Cards you've peeked at stay visible for 15s. Tracked by card (a deck has no duplicates), not slot,
+  // so rearranging, removing or matching cards can't reset or re-trigger a reveal.
+  const [visibleCards, setVisibleCards] = useState({});
+  const [peekTimeLeft, setPeekTimeLeft] = useState(0);
   const expiryRef    = useRef({});
+  const seenCardsRef = useRef(new Set());
   const tickRef      = useRef(null);
-  const prevKnownRef = useRef({});
+
+  // Highlights from table events: "playerId:slot" -> kind (swap | moved | jack | queen | penalty | fail)
+  const [highlights, setHighlights] = useState({});
+  const [jackStep, setJackStep]     = useState(0); // which Jack target the next table tap fills in
 
   // Dutch window countdown
   const [dutchWindowSecondsLeft, setDutchWindowSecondsLeft] = useState(0);
@@ -242,14 +106,14 @@ export default function App() {
       const now = Date.now();
       const expired = [];
       let minRemaining = Infinity;
-      for (const [idx, expiresAt] of Object.entries(expiryRef.current)) {
-        if (expiresAt <= now) { expired.push(idx); delete expiryRef.current[idx]; }
+      for (const [card, expiresAt] of Object.entries(expiryRef.current)) {
+        if (expiresAt <= now) { expired.push(card); delete expiryRef.current[card]; }
         else minRemaining = Math.min(minRemaining, expiresAt - now);
       }
       if (expired.length > 0) {
-        setVisibleKnown((prev) => {
+        setVisibleCards((prev) => {
           const next = { ...prev };
-          for (const idx of expired) delete next[idx];
+          for (const card of expired) delete next[card];
           return next;
         });
       }
@@ -263,11 +127,28 @@ export default function App() {
     }, 500);
   }
 
+  function addHighlights(entries) {
+    setHighlights((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+    setTimeout(() => {
+      setHighlights((prev) => {
+        const next = { ...prev };
+        for (const [key, kind] of entries) if (next[key] === kind) delete next[key];
+        return next;
+      });
+    }, 3500);
+  }
+
   useEffect(() => {
     const onLog = (msg) => setLog((prev) => [...prev, msg]);
 
     const onRoomUpdate = (data) => {
       setRoom(data);
+      if (data?.phase === "SCORING" || data?.phase === "LOBBY") {
+        seenCardsRef.current.clear();
+        expiryRef.current = {};
+        setVisibleCards({});
+        setPeekTimeLeft(0);
+      }
       if (data?.players?.length > 0) {
         const firstId = data.players[0].id;
         setJackA((p) => (p.playerId ? p : { playerId: firstId, index: 0 }));
@@ -284,34 +165,36 @@ export default function App() {
         clearTimeout(queenRevealTimerRef.current);
         queenRevealTimerRef.current = setTimeout(() => setQueenReveal(null), 20000);
       }
-      const newKnown  = data?.known ?? {};
-      const prevKnown = prevKnownRef.current;
+      const knownCards = new Set(Object.values(data?.known ?? {}));
 
-      for (const idx of Object.keys(expiryRef.current)) {
-        if (newKnown[idx] === undefined) delete expiryRef.current[idx];
+      for (const card of Object.keys(expiryRef.current)) {
+        if (!knownCards.has(card)) delete expiryRef.current[card];
       }
-
-      const newlyRevealed = {};
-      for (const [idx, card] of Object.entries(newKnown)) {
-        if (prevKnown[idx] === undefined || prevKnown[idx] !== card) {
-          newlyRevealed[idx] = card;
-          expiryRef.current[idx] = Date.now() + 15000;
+      const fresh = [];
+      for (const card of knownCards) {
+        if (!seenCardsRef.current.has(card)) {
+          seenCardsRef.current.add(card);
+          expiryRef.current[card] = Date.now() + 15000;
+          fresh.push(card);
         }
       }
-
-      setVisibleKnown((prev) => {
+      setVisibleCards((prev) => {
         const next = {};
-        for (const [idx, card] of Object.entries(prev)) {
-          if (newKnown[idx] !== undefined) next[idx] = card;
-        }
-        for (const [idx, card] of Object.entries(newlyRevealed)) {
-          next[idx] = card;
-        }
+        for (const card of Object.keys(prev)) if (knownCards.has(card)) next[card] = true;
+        for (const card of fresh) next[card] = true;
         return next;
       });
+      if (fresh.length > 0) startCardTick();
+    };
 
-      if (Object.keys(newlyRevealed).length > 0) startCardTick();
-      prevKnownRef.current = newKnown;
+    const onTableEvent = (ev) => {
+      const key = (pid, i) => `${pid}:${i}`;
+      if (ev.type === "swap")         addHighlights([[key(ev.playerId, ev.index), "swap"]]);
+      else if (ev.type === "reorder") addHighlights([[key(ev.playerId, ev.to), "moved"]]);
+      else if (ev.type === "match" && !ev.ok) addHighlights([[key(ev.playerId, ev.index), "fail"]]);
+      else if (ev.type === "jack")    addHighlights([[key(ev.a.playerId, ev.a.index), "jack"], [key(ev.b.playerId, ev.b.index), "jack"]]);
+      else if (ev.type === "queen")   addHighlights([[key(ev.targetPlayerId, ev.index), "queen"]]);
+      else if (ev.type === "ace")     addHighlights([[key(ev.targetPlayerId, ev.index), "penalty"]]);
     };
 
     const onError = (e) => setLog((prev) => [...prev, `ERROR: ${e.message}`]);
@@ -320,12 +203,14 @@ export default function App() {
     socket.on("room:update", onRoomUpdate);
     socket.on("me:update",   onMeUpdate);
     socket.on("error",       onError);
+    socket.on("table:event", onTableEvent);
 
     return () => {
       socket.off("log",         onLog);
       socket.off("room:update", onRoomUpdate);
       socket.off("me:update",   onMeUpdate);
       socket.off("error",       onError);
+      socket.off("table:event", onTableEvent);
       if (tickRef.current)          clearInterval(tickRef.current);
       if (dutchWindowTickRef.current) clearInterval(dutchWindowTickRef.current);
     };
@@ -386,6 +271,31 @@ export default function App() {
     (inDutchWindow || (isMyTurn && !pending));
 
   const totals  = room?.totals  ?? {};
+
+  const selIdx      = Math.min(matchIndex, Math.max(handSize - 1, 0));
+  const getVisibleCard = (i) => {
+    const card = me?.known?.[i];
+    return card && visibleCards[card] ? card : null;
+  };
+  const canReorder  = phase === "PLAY" && dutchCallerId !== socket.id && handSize > 1;
+  const targetMode  = myEffect?.type ?? null;
+
+  // Tapping cards on the table fills in Jack / Queen targets
+  const onTableCardClick = (pid, idx) => {
+    if (targetMode === "JACK") {
+      if (jackStep === 0) { setJackA({ playerId: pid, index: idx }); setJackStep(1); }
+      else { setJackB({ playerId: pid, index: idx }); setJackStep(0); }
+    } else if (targetMode === "QUEEN") {
+      setQueenTarget({ playerId: pid, index: idx });
+    }
+  };
+  const marks = {};
+  if (targetMode === "JACK") {
+    marks[`${jackA.playerId}:${jackA.index}`] = "pick";
+    marks[`${jackB.playerId}:${jackB.index}`] = "pick";
+  } else if (targetMode === "QUEEN") {
+    marks[`${queenTarget.playerId}:${queenTarget.index}`] = "pick";
+  }
 
   // ── Shared felt background ─────────────────────────────────────────────────
   const feltBg = {
@@ -614,22 +524,20 @@ export default function App() {
             {/* Right column: main game area */}
             <div style={{ flex: mobile ? "1 1 100%" : 1, order: mobile ? 1 : 0, minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
 
-              {/* Discard pile */}
+              {/* TABLE (top-down view of everyone's cards) */}
               {room && phase !== "LOBBY" && (
-                <Panel title="Discard Pile">
-                  <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#a89060", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>Top card</div>
-                      {room.discardTop
-                        ? <CardFace card={room.discardTop} size="lg" />
-                        : <div style={{ width: 88, height: 124, border: "2px dashed rgba(255,255,255,0.2)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "#666", fontSize: 12 }}>empty</div>
-                      }
-                    </div>
-                    <div style={{ fontSize: 12, color: "#a89060" }}>
-                      Deck has <b style={{ color: "#e8d5a3" }}>{room.deckCount}</b> cards remaining
-                    </div>
-                  </div>
-                </Panel>
+                <Table
+                  room={room} meId={socket.id} me={me}
+                  getVisibleCard={getVisibleCard}
+                  highlights={highlights} marks={marks}
+                  selectedIndex={phase === "PLAY" ? selIdx : -1}
+                  canReorder={canReorder}
+                  targetMode={targetMode} aceTarget={aceTarget}
+                  onReorder={(from, to) => { socket.emit("hand:reorder", { roomId, from, to }); setMatchIndex(to); }}
+                  onMyCardClick={(i) => phase === "PLAY" && setMatchIndex(i)}
+                  onCardClick={onTableCardClick}
+                  onSeatClick={(pid) => setAceTarget(pid)}
+                />
               )}
 
               {/* PEEK PHASE */}
@@ -684,51 +592,18 @@ export default function App() {
                 </Panel>
               )}
 
-              {/* YOUR HAND */}
-              {me && phase !== "LOBBY" && (
-                <Panel title={`Your Hand${peekTimeLeft > 0 ? ` — Cards hidden in ${peekTimeLeft}s` : ""}`}>
-                  {peekTimeLeft > 0 && (
-                    <div style={{ marginBottom: 10, padding: "4px 10px", background: "rgba(255,193,7,0.15)", border: "1px solid rgba(255,193,7,0.4)", borderRadius: 5, display: "inline-block", fontSize: 12, color: "#ffd700" }}>
-                      ⏱ Cards hidden in <b>{peekTimeLeft}s</b>
-                    </div>
-                  )}
-                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", paddingBottom: 24 }}>
-                    {Array.from({ length: handSize }).map((_, idx) => {
-                      const knownCard = visibleKnown[idx];
-                      const isMatchSelected = matchIndex === idx;
-                      return knownCard ? (
-                        <CardFace
-                          key={idx}
-                          card={knownCard}
-                          size="md"
-                          selected={phase === "PLAY" && isMatchSelected}
-                          onClick={() => phase === "PLAY" && setMatchIndex(idx)}
-                          label={idx}
-                        />
-                      ) : (
-                        <CardBack
-                          key={idx}
-                          size="md"
-                          selected={phase === "PLAY" && isMatchSelected}
-                          onClick={() => phase === "PLAY" && setMatchIndex(idx)}
-                          label={idx}
-                        />
-                      );
-                    })}
+              {/* HAND ACTIONS */}
+              {me && phase === "PLAY" && handSize > 0 && (
+                <Panel title={`Your Cards${peekTimeLeft > 0 ? ` — peeked cards hide in ${peekTimeLeft}s` : ""}`}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, color: "#a89060" }}>Selected card #{selIdx} (tap a card to select):</span>
+                    <Btn
+                      disabled={!room?.discardTop || handSize === 0}
+                      onClick={() => socket.emit("match:attempt", { roomId, index: selIdx })}
+                    >
+                      Attempt Match
+                    </Btn>
                   </div>
-
-                  {/* Match out of turn */}
-                  {phase === "PLAY" && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
-                      <span style={{ fontSize: 12, color: "#a89060" }}>Match card #{matchIndex} to discard:</span>
-                      <Btn
-                        disabled={!room?.discardTop || handSize === 0}
-                        onClick={() => socket.emit("match:attempt", { roomId, index: matchIndex })}
-                      >
-                        Attempt Match
-                      </Btn>
-                    </div>
-                  )}
                 </Panel>
               )}
 
@@ -806,22 +681,12 @@ export default function App() {
                           >
                             Discard it
                           </Btn>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 13, color: "#a89060" }}>Swap into slot</span>
-                            <select
-                              value={swapIndex}
-                              onChange={(e) => setSwapIndex(Number(e.target.value))}
-                              style={selectStyle}
-                            >
-                              {Array.from({ length: handSize }).map((_, i) => <option key={i} value={i}>#{i}</option>)}
-                            </select>
-                            <Btn
-                              disabled={!isMyTurn}
-                              onClick={() => socket.emit("turn:swap", { roomId, index: swapIndex })}
-                            >
-                              Swap
-                            </Btn>
-                          </div>
+                          <Btn
+                            disabled={!isMyTurn}
+                            onClick={() => socket.emit("turn:swap", { roomId, index: selIdx })}
+                          >
+                            Swap into selected card (#{selIdx})
+                          </Btn>
                         </div>
                       </div>
                     </div>
@@ -832,7 +697,7 @@ export default function App() {
               {/* JACK EFFECT */}
               {myEffect?.type === "JACK" && (
                 <Panel title="♠ Jack Effect — Swap Two Cards">
-                  <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>Choose any two cards from any players to swap.</div>
+                  <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>Tap two cards on the table (yours or anyone else’s) to swap them, then confirm.</div>
                   <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16 }}>
                     {[["Card A", jackA, setJackA], ["Card B", jackB, setJackB]].map(([label, val, setter]) => (
                       <div key={label} style={{ background: "rgba(0,0,0,0.2)", padding: "12px 14px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)" }}>
@@ -859,7 +724,7 @@ export default function App() {
               {/* QUEEN EFFECT */}
               {myEffect?.type === "QUEEN" && (
                 <Panel title="♛ Queen Effect — Peek Any Card">
-                  <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>Peek at any one card from any player's hand.</div>
+                  <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>Tap any card on the table to peek at it, then confirm.</div>
                   <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
                     <label style={{ fontSize: 13, color: "#a89060" }}>
                       Player:&nbsp;
@@ -882,8 +747,8 @@ export default function App() {
 
               {/* ACE EFFECT */}
               {myEffect?.type === "ACE" && (
-                <Panel title="♠ Ace Effect — Peek Your Own Card">
-                  <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>Peek at one of your own cards.</div>
+                <Panel title="♠ Ace Effect — Give a Penalty Card">
+                  <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>Tap a player on the table to give them a penalty card, then confirm.</div>
                   <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
                     <label style={{ fontSize: 13, color: "#a89060" }}>
                       Target:&nbsp;
