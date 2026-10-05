@@ -178,6 +178,7 @@ function publicRoomView(room) {
   const g = room.game;
   const base = {
     hostId: room.hostId,
+    nextDealerId: room.players.length ? room.players[((room.dealerIndex ?? 0) + 1) % room.players.length]?.id ?? null : null,
     players: room.players.map((p) => ({ id: p.id, name: p.name })),
     phase: g?.phase ?? "LOBBY",
     lookCount: g?.lookCount ?? 0,
@@ -315,16 +316,20 @@ io.on("connection", (socket) => {
     } catch (e) { emitError(socket.id, e.message); }
   });
 
-  socket.on("game:newRound", ({ roomId }) => {
+  socket.on("game:newRound", ({ roomId, lookCount }) => {
     try {
       const room = getRoomOrThrow(roomId);
-      if (room.hostId !== socket.id) return;
       if (room.game?.phase !== "SCORING" || room.game?.gameOver) return;
-      const lc = room.game.lookCount;
-      room.dealerIndex = ((room.dealerIndex ?? 0) + 1) % room.players.length;
+      if (!room.players.length) return;
+      // The incoming dealer chooses how many cards everyone peeks at this round
+      const nextDealerIndex = ((room.dealerIndex ?? 0) + 1) % room.players.length;
+      if (room.players[nextDealerIndex].id !== socket.id) return;
+      const lc = lookCount === undefined ? room.game.lookCount : Number(lookCount);
+      if (![0, 1, 2, 3, 4].includes(lc)) return;
+      room.dealerIndex = nextDealerIndex;
       clearDutchWindow(room, roomId);
       room.game = freshGameState(room, lc);
-      io.to(roomId).emit("log", `New round! Dealer rotated to ${room.players[room.dealerIndex]?.name}.`);
+      io.to(roomId).emit("log", `New round! ${room.players[room.dealerIndex]?.name} is dealer and chose ${lc} peek card(s).`);
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });

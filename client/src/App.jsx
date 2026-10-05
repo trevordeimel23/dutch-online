@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
+// ── Responsive helper ───────────────────────────────────────────────────────
+function useIsMobile(breakpoint = 700) {
+  const query = `(max-width: ${breakpoint}px)`;
+  const [mobile, setMobile] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = (e) => setMobile(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [query]);
+  return mobile;
+}
+
 // ── Card display helpers ────────────────────────────────────────────────────
 
 // Normalize any suit representation to a Unicode symbol
@@ -40,7 +53,12 @@ function cardStr(card) {
 function CardFace({ card, size = "md", selected, onClick, label, dimmed }) {
   const { rank, suit } = splitCard(card);
   const red = isRed(card);
-  const sizes = {
+  const mobile = useIsMobile();
+  const sizes = mobile ? {
+    sm: { width: 40, height: 56, center: 16, corner: 9 },
+    md: { width: 58, height: 82, center: 22, corner: 11 },
+    lg: { width: 72, height: 102, center: 28, corner: 12 },
+  } : {
     sm: { width: 48, height: 68, center: 18, corner: 10 },
     md: { width: 70, height: 98, center: 26, corner: 12 },
     lg: { width: 88, height: 124, center: 32, corner: 14 },
@@ -87,7 +105,12 @@ function CardFace({ card, size = "md", selected, onClick, label, dimmed }) {
 }
 
 function CardBack({ size = "md", selected, onClick, label }) {
-  const sizes = {
+  const mobile = useIsMobile();
+  const sizes = mobile ? {
+    sm: { width: 40, height: 56 },
+    md: { width: 58, height: 82 },
+    lg: { width: 72, height: 102 },
+  } : {
     sm: { width: 48, height: 68 },
     md: { width: 70, height: 98 },
     lg: { width: 88, height: 124 },
@@ -132,16 +155,19 @@ function Btn({ children, onClick, disabled, variant = "default", style: extra })
     ghost:   { background: "rgba(255,255,255,0.1)",                         color: "#e8d5a3", border: "1px solid rgba(255,255,255,0.3)" },
   };
   const v = variants[variant] || variants.default;
+  const mobile = useIsMobile();
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       style={{
         ...v,
-        padding: "8px 18px",
+        padding: mobile ? "10px 14px" : "8px 18px",
+        minHeight: mobile ? 44 : undefined,
+        touchAction: "manipulation",
         borderRadius: 6,
         fontFamily: "Georgia, serif",
-        fontSize: 14,
+        fontSize: mobile ? 15 : 14,
         fontWeight: "bold",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.45 : 1,
@@ -156,12 +182,13 @@ function Btn({ children, onClick, disabled, variant = "default", style: extra })
 }
 
 function Panel({ children, style: extra, title }) {
+  const mobile = useIsMobile();
   return (
     <div style={{
       background: "rgba(0,0,0,0.25)",
       border: "1px solid rgba(255,255,255,0.15)",
       borderRadius: 10,
-      padding: "14px 18px",
+      padding: mobile ? "12px 12px" : "14px 18px",
       ...extra,
     }}>
       {title && (
@@ -179,6 +206,7 @@ function Panel({ children, style: extra, title }) {
 export default function App() {
   const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
   const socket = useMemo(() => io(SERVER_URL), []);
+  const mobile = useIsMobile();
 
   const [roomId, setRoomId]   = useState("TEST");
   const [name, setName]       = useState("Trevor");
@@ -321,9 +349,12 @@ export default function App() {
 
   const join     = () => socket.emit("room:join",   { roomId, name });
   const start    = () => socket.emit("game:start",  { roomId, lookCount });
-  const newRound = () => socket.emit("game:newRound", { roomId });
+  const newRound = () => socket.emit("game:newRound", { roomId, lookCount });
 
+  const players = room?.players ?? [];
   const phase          = room?.phase ?? "LOBBY";
+  const isNextDealer   = room?.nextDealerId === socket.id;
+  const nextDealerName = players.find((p) => p.id === room?.nextDealerId)?.name;
   const isHost         = room?.hostId === socket.id;
   const isMyTurn       = room?.turnPlayerId === socket.id;
   const effectiveLookCount = room?.lookCount ?? lookCount;
@@ -347,7 +378,6 @@ export default function App() {
   const canCallDutch = phase === "PLAY" && !dutchCallerId && !pendingEffect &&
     (inDutchWindow || (isMyTurn && !pending));
 
-  const players = room?.players ?? [];
   const totals  = room?.totals  ?? {};
 
   // ── Shared felt background ─────────────────────────────────────────────────
@@ -357,6 +387,7 @@ export default function App() {
     fontFamily: "Georgia, 'Times New Roman', serif",
     color: "#e8d5a3",
     padding: "0 0 40px 0",
+    overflowX: "hidden",
   };
 
   // ── INPUT style ─────────────────────────────────────────────────────────────
@@ -367,7 +398,9 @@ export default function App() {
     color: "#e8d5a3",
     padding: "8px 12px",
     fontFamily: "Georgia, serif",
-    fontSize: 14,
+    fontSize: mobile ? 16 : 14, // 16px stops iOS zooming into inputs
+    minHeight: mobile ? 40 : undefined,
+    boxSizing: "border-box",
     outline: "none",
     width: 140,
   };
@@ -386,7 +419,7 @@ export default function App() {
       <div style={{
         background: "rgba(0,0,0,0.5)",
         borderBottom: "2px solid rgba(200,169,110,0.4)",
-        padding: "12px 28px",
+        padding: mobile ? "10px 12px" : "12px 28px",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
@@ -395,30 +428,30 @@ export default function App() {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 28 }}>🃏</span>
-          <span style={{ fontSize: 24, fontWeight: "bold", letterSpacing: "0.06em", color: "#f0d080" }}>DUTCH</span>
+          <span style={{ fontSize: mobile ? 20 : 24, fontWeight: "bold", letterSpacing: "0.06em", color: "#f0d080" }}>DUTCH</span>
           {room && <span style={{ fontSize: 13, color: "#a89060", marginLeft: 8 }}>Room: <b style={{ color: "#e8d5a3" }}>{roomId.toUpperCase()}</b></span>}
         </div>
 
         {/* Join controls — always visible so player can change name/room */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", width: mobile ? "100%" : undefined }}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Your name"
-            style={{ ...inputStyle, width: 120 }}
+            style={{ ...inputStyle, width: mobile ? undefined : 120, flex: mobile ? "1 1 90px" : undefined, minWidth: 0 }}
           />
           <input
             value={roomId}
             onChange={(e) => setRoomId(e.target.value.toUpperCase())}
             placeholder="Room ID"
-            style={{ ...inputStyle, width: 90, textTransform: "uppercase" }}
+            style={{ ...inputStyle, width: mobile ? undefined : 90, flex: mobile ? "1 1 70px" : undefined, minWidth: 0, textTransform: "uppercase" }}
           />
           <Btn onClick={join}>Join Room</Btn>
         </div>
       </div>
 
       {/* ── Main content ───────────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 1400, width: "100%", margin: "0 auto", padding: "24px 28px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1400, width: "100%", margin: "0 auto", padding: mobile ? "12px 10px" : "24px 28px", boxSizing: "border-box" }}>
 
         {/* ── SCORING SCREEN ──────────────────────────────────────────────── */}
         {phase === "SCORING" && (
@@ -435,6 +468,7 @@ export default function App() {
             </div>
 
             <Panel>
+              <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ color: "#c8a96e", fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase" }}>
@@ -469,11 +503,22 @@ export default function App() {
                   })}
                 </tbody>
               </table>
+              </div>
             </Panel>
 
-            <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 20 }}>
-              {isHost && !room.gameOver && <Btn variant="success" onClick={newRound}>▶ Start Next Round</Btn>}
-              {!isHost && !room.gameOver && <span style={{ color: "#a89060", fontStyle: "italic" }}>Waiting for host to start next round…</span>}
+            <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 20, flexWrap: "wrap" }}>
+              {isNextDealer && !room.gameOver && (
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
+                  <label style={{ fontSize: 14, color: "#c8a96e" }}>
+                    You deal next — cards to peek
+                    <select value={lookCount} onChange={(e) => setLookCount(Number(e.target.value))} style={{ ...selectStyle, marginLeft: 8 }}>
+                      {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </label>
+                  <Btn variant="success" onClick={newRound}>▶ Start Next Round</Btn>
+                </div>
+              )}
+              {!isNextDealer && !room.gameOver && <span style={{ color: "#a89060", fontStyle: "italic" }}>Waiting for dealer {nextDealerName ?? ""} to choose peek cards and start the next round…</span>}
               {room.gameOver && isHost && <Btn variant="success" onClick={start}>🔄 New Game</Btn>}
             </div>
           </div>
@@ -484,7 +529,7 @@ export default function App() {
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
 
             {/* Left column: players + status */}
-            <div style={{ flex: "0 0 240px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ flex: mobile ? "1 1 100%" : "0 0 240px", order: mobile ? 2 : 0, display: "flex", flexDirection: "column", gap: 14 }}>
 
               {/* Players list */}
               {players.length > 0 && (
@@ -561,7 +606,7 @@ export default function App() {
             </div>
 
             {/* Right column: main game area */}
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ flex: mobile ? "1 1 100%" : 1, order: mobile ? 1 : 0, minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
 
               {/* Discard pile */}
               {room && phase !== "LOBBY" && (
