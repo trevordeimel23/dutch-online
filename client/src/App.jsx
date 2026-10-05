@@ -282,7 +282,7 @@ export default function App() {
       if (data?.queenReveal) {
         setQueenReveal(data.queenReveal);
         clearTimeout(queenRevealTimerRef.current);
-        queenRevealTimerRef.current = setTimeout(() => setQueenReveal(null), 15000);
+        queenRevealTimerRef.current = setTimeout(() => setQueenReveal(null), 20000);
       }
       const newKnown  = data?.known ?? {};
       const prevKnown = prevKnownRef.current;
@@ -377,7 +377,7 @@ export default function App() {
   const pending       = me?.pendingDraw ?? null;
   const handSize      = me?.handSize ?? 0;
   const pendingEffect = room?.pendingEffect ?? null;
-  const myEffect      = pendingEffect?.actorId === socket.id ? pendingEffect : null;
+  const myEffect      = (pendingEffect?.actorId === socket.id ? pendingEffect : null) ?? (me?.matchEffect ? { type: me.matchEffect, actorId: socket.id } : null);
   const dutchCallerId = room?.dutchCallerId ?? null;
   const dutchCallerName = room?.players?.find((p) => p.id === dutchCallerId)?.name;
   const inDutchWindow = room?.dutchWindowPlayerId === socket.id;
@@ -439,29 +439,28 @@ export default function App() {
           {room && <span style={{ fontSize: 13, color: "#a89060", marginLeft: 8 }}>Room: <b style={{ color: "#e8d5a3" }}>{roomId.toUpperCase()}</b></span>}
         </div>
 
-        {/* Join controls — always visible so player can change name/room */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", width: mobile ? "100%" : undefined }}>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name"
-            style={{ ...inputStyle, width: mobile ? undefined : 120, flex: mobile ? "1 1 90px" : undefined, minWidth: 0 }}
-          />
-          <input
-            value={roomId}
-            onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-            placeholder="Room ID"
-            style={{ ...inputStyle, width: mobile ? undefined : 90, flex: mobile ? "1 1 70px" : undefined, minWidth: 0, textTransform: "uppercase" }}
-          />
-          <Btn onClick={join}>Join Room</Btn>
-        </div>
       </div>
 
       {/* ── Main content ───────────────────────────────────────────────────── */}
       <div style={{ maxWidth: 1400, width: "100%", margin: "0 auto", padding: mobile ? "12px 10px" : "24px 28px", boxSizing: "border-box" }}>
 
+        {/* ── LANDING: join a room ───────────────────────────────────────── */}
+        {!room && (
+          <div style={{ maxWidth: 380, margin: mobile ? "24px auto" : "60px auto", textAlign: "center" }}>
+            <Panel title="Join a Room">
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name"
+                  style={{ ...inputStyle, width: "100%" }} />
+                <input value={roomId} onChange={(e) => setRoomId(e.target.value.toUpperCase())} placeholder="Room ID"
+                  style={{ ...inputStyle, width: "100%", textTransform: "uppercase" }} />
+                <Btn onClick={join} disabled={!name.trim() || !roomId.trim()}>Join Room</Btn>
+              </div>
+            </Panel>
+          </div>
+        )}
+
         {/* ── SCORING SCREEN ──────────────────────────────────────────────── */}
-        {phase === "SCORING" && (
+        {room && phase === "SCORING" && (
           <div>
             <div style={{ textAlign: "center", marginBottom: 20 }}>
               <div style={{ fontSize: 32, fontWeight: "bold", color: "#f0d080", letterSpacing: "0.05em" }}>
@@ -532,7 +531,7 @@ export default function App() {
         )}
 
         {/* ── ACTIVE GAME ─────────────────────────────────────────────────── */}
-        {phase !== "SCORING" && (
+        {room && phase !== "SCORING" && (
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
 
             {/* Left column: players + status */}
@@ -676,8 +675,10 @@ export default function App() {
                     <CardFace card={queenReveal.card} size="lg" />
                     <div style={{ fontSize: 14 }}>
                       <b style={{ color: "#ffd700" }}>{queenReveal.targetName}</b>'s card #{queenReveal.targetIndex}
-                      <div style={{ fontSize: 12, color: "#a89060", marginTop: 6 }}>Only you can see this. Hides in 15 seconds.</div>
-                      <Btn variant="ghost" style={{ marginTop: 8 }} onClick={() => setQueenReveal(null)}>Hide</Btn>
+                            <div style={{ fontSize: 12, color: "#a89060", marginTop: 6 }}>Only you can see this.{room?.revealHold === socket.id ? " Scoring starts when you press Done (or in 20 seconds)." : " Hides automatically."}</div>
+                      {room?.revealHold === socket.id
+                        ? <Btn variant="success" style={{ marginTop: 8 }} onClick={() => { setQueenReveal(null); socket.emit("reveal:done", { roomId }); }}>Done — go to scoring</Btn>
+                        : <Btn variant="ghost" style={{ marginTop: 8 }} onClick={() => setQueenReveal(null)}>Hide</Btn>}
                     </div>
                   </div>
                 </Panel>
@@ -759,7 +760,7 @@ export default function App() {
               )}
 
               {/* TURN CONTROLS */}
-              {me && phase === "PLAY" && !myEffect && !inDutchWindow && (
+              {me && phase === "PLAY" && !myEffect && !inDutchWindow && !room?.revealHold && (
                 <Panel title={isMyTurn ? "Your Turn" : "Waiting…"}>
                   {isMyTurn
                     ? <div style={{ fontSize: 13, color: "#81c784", marginBottom: 12 }}>▶ It's your turn! Draw a card or call Dutch.</div>

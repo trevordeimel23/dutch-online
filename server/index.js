@@ -45,7 +45,28 @@ function getRoomOrThrow(roomId) {
 function isPlayersTurn(room, playerId) {
   const g = room.game;
   if (!g || g.phase !== "PLAY") return false;
+  if (g.revealHold) return false; // round is waiting for the last player to look at their Queen peek
   return room.players[g.turnIndex]?.id === playerId;
+}
+
+// Last turn after Dutch ended with a Queen peek: give the player time to look before scoring
+function holdForReveal(room, roomId, playerId) {
+  const g = room.game;
+  g.pendingEffect = null;
+  g.revealHold = playerId;
+  clearDutchWindow(room, roomId);
+  const timer = setTimeout(() => releaseRevealHold(roomId), 20000);
+  roomTimers.set(roomId, timer);
+}
+
+function releaseRevealHold(roomId) {
+  const room = rooms.get(roomId);
+  const g = room?.game;
+  if (!g?.revealHold) return;
+  clearDutchWindow(room, roomId);
+  g.revealHold = null;
+  nextTurn(room, roomId);
+  broadcastRoom(roomId);
 }
 
 // Start a 10-second window where the current player can call Dutch before turn advances
@@ -167,6 +188,7 @@ function nextTurn(room, roomId) {
 
 // After a turn action completes: start dutch window if Dutch not yet called, else just next turn
 function completeTurnAction(room, roomId, playerId) {
+  room.game.pendingEffect = null; // effect (if any) is resolved, so its panel must go away
   if (room.game?.dutchCallerId) {
     nextTurn(room, roomId);
   } else {
@@ -186,6 +208,7 @@ function publicRoomView(room) {
     deckCount: g?.deck?.length ?? 0,
     turnPlayerId: g?.phase === "PLAY" ? room.players[g.turnIndex]?.id ?? null : null,
     pendingEffect: g?.pendingEffect ?? null,
+    revealHold: g?.revealHold ?? null,
     dutchCallerId: g?.dutchCallerId ?? null,
     dutchTurnsLeft: g?.dutchTurnsLeft ?? null,
     dutchWindowPlayerId: g?.dutchWindowPlayerId ?? null,
@@ -211,6 +234,7 @@ function privateViewFor(room, playerId) {
     hasPeeked: g?.hasPeeked?.has(playerId) ?? false,
     pendingDraw: g?.pendingDraw?.get(playerId) ?? null,
     // One-shot Queen result, only ever sent to the player who used the Queen
+    matchEffect: g?.matchEffects?.[playerId]?.[0] ?? null,
     queenReveal: g?.peekRevealFor?.[playerId] ?? null,
   };
 }
@@ -250,6 +274,20 @@ function checkAndSetSpecialEffect(room, card, actorId) {
   return false;
 }
 
+// Which kind of effect is this player resolving? "turn" = their own discard, "match" = a card they matched out of turn
+function effectSource(room, playerId, type) {
+  const g = room.game;
+  if (!g || g.phase !== "PLAY" || g.revealHold) return null;
+  if (g.pendingEffect?.type === type && g.pendingEffect.actorId === playerId && isPlayersTurn(room, playerId)) return "turn";
+  if (g.matchEffects?.[playerId]?.[0] === type) return "match";
+  return null;
+}
+
+function finishEffect(room, roomId, playerId, source) {
+  if (source === "match") room.game.matchEffects[playerId].shift();
+  else completeTurnAction(room, roomId, playerId);
+}
+
 function freshGameState(room, lookCount) {
   const deck = makeDeck();
   const hands = new Map();
@@ -274,6 +312,7 @@ function freshGameState(room, lookCount) {
     hasPeeked,
     pendingDraw,
     pendingEffect: null,
+    matchEffects: {}, // playerId -> queue of effect types earned by matching out of turn
     peekRevealFor: {},
     dutchCallerId: null,
     dutchTurnsLeft: null,
@@ -419,10 +458,19 @@ io.on("connection", (socket) => {
     } catch (e) { emitError(socket.id, e.message); }
   });
 
+  socket.on("reveal:done", ({ roomId }) => {
+    try {
+      const room = getRoomOrThrow(roomId);
+      if (room.game?.revealHold !== socket.id) return;
+      releaseRevealHold(roomId);
+    } catch (e) { emitError(socket.id, e.message); }
+  });
+
   socket.on("match:attempt", ({ roomId, index }) => {
     try {
       const room = getRoomOrThrow(roomId);
       const g = room.game;
+      if (g?.revealHold) return;
       if (!g || g.phase !== "PLAY") return;
       if (!g.discardTop) { emitError(socket.id, "No discard card to match."); return; }
 
@@ -438,7 +486,12 @@ io.on("connection", (socket) => {
         g.known.set(socket.id, shiftKnownAfterRemoval(g.known.get(socket.id) ?? {}, i));
         g.discardTop = candidate;
         const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
-        io.to(roomId).emit("log", `${name} MATCHED and discarded!`);
+        const effectType = { J: "JACK", Q: "QUEEN", A: "ACE" }[rankOf(candidate)];
+        if (effectType) {
+          if (!g.matchEffects[socket.id]) g.matchEffects[socket.id] = [];
+          g.matchEffects[socket.id].push(effectType);
+        }
+        io.to(roomId).emit("log", `${name} MATCHED and discarded!${effectType ? ` ${rankOf(candidate)} effect!` : ""}`);
         broadcastRoom(roomId);
       } else {
         if (g.deck.length > 0) {
@@ -541,10 +594,8 @@ io.on("connection", (socket) => {
       const room = getRoomOrThrow(roomId);
       const g = room.game;
       if (!g || g.phase !== "PLAY") return;
-      if (!isPlayersTurn(room, socket.id)) { emitError(socket.id, "Not your turn."); return; }
-      if (!g.pendingEffect || g.pendingEffect.type !== "JACK" || g.pendingEffect.actorId !== socket.id) {
-        emitError(socket.id, "No Jack effect to resolve."); return;
-      }
+      const source = effectSource(room, socket.id, "JACK");
+      if (!source) { emitError(socket.id, "No Jack effect to resolve."); return; }
       if (g.dutchCallerId && (a.playerId === g.dutchCallerId || b.playerId === g.dutchCallerId)) {
         emitError(socket.id, "Cannot swap the Dutch caller's cards."); return;
       }
@@ -572,7 +623,7 @@ io.on("connection", (socket) => {
       const nB = room.players.find((p) => p.id === b.playerId)?.name ?? b.playerId;
       io.to(roomId).emit("log", `${actor} used Jack: swapped ${nA}[${ai}] and ${nB}[${bi}].`);
 
-      completeTurnAction(room, roomId, socket.id);
+      finishEffect(room, roomId, socket.id, source);
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });
@@ -582,10 +633,8 @@ io.on("connection", (socket) => {
       const room = getRoomOrThrow(roomId);
       const g = room.game;
       if (!g || g.phase !== "PLAY") return;
-      if (!isPlayersTurn(room, socket.id)) { emitError(socket.id, "Not your turn."); return; }
-      if (!g.pendingEffect || g.pendingEffect.type !== "QUEEN" || g.pendingEffect.actorId !== socket.id) {
-        emitError(socket.id, "No Queen effect to resolve."); return;
-      }
+      const source = effectSource(room, socket.id, "QUEEN");
+      if (!source) { emitError(socket.id, "No Queen effect to resolve."); return; }
       if (g.dutchCallerId && targetPlayerId === g.dutchCallerId) {
         emitError(socket.id, "Cannot peek the Dutch caller's cards."); return;
       }
@@ -611,7 +660,13 @@ io.on("connection", (socket) => {
       const tName = room.players.find((p) => p.id === targetPlayerId)?.name ?? targetPlayerId;
       io.to(roomId).emit("log", `${actor} used Queen to peek a card from ${tName}.`);
 
-      completeTurnAction(room, roomId, socket.id);
+      if (source === "match") {
+        g.matchEffects[socket.id].shift();
+      } else if (g.dutchCallerId && (g.dutchTurnsLeft ?? 0) <= 1) {
+        holdForReveal(room, roomId, socket.id); // this was the final turn: let them look before scoring
+      } else {
+        completeTurnAction(room, roomId, socket.id);
+      }
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });
@@ -621,10 +676,8 @@ io.on("connection", (socket) => {
       const room = getRoomOrThrow(roomId);
       const g = room.game;
       if (!g || g.phase !== "PLAY") return;
-      if (!isPlayersTurn(room, socket.id)) { emitError(socket.id, "Not your turn."); return; }
-      if (!g.pendingEffect || g.pendingEffect.type !== "ACE" || g.pendingEffect.actorId !== socket.id) {
-        emitError(socket.id, "No Ace effect to resolve."); return;
-      }
+      const source = effectSource(room, socket.id, "ACE");
+      if (!source) { emitError(socket.id, "No Ace effect to resolve."); return; }
       if (g.dutchCallerId && targetPlayerId === g.dutchCallerId) {
         emitError(socket.id, "Cannot give a penalty card to the Dutch caller."); return;
       }
@@ -641,7 +694,7 @@ io.on("connection", (socket) => {
         io.to(roomId).emit("log", `${actor} used Ace: ${target.name} gets a penalty card.`);
       }
 
-      completeTurnAction(room, roomId, socket.id);
+      finishEffect(room, roomId, socket.id, source);
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });
