@@ -210,6 +210,8 @@ function privateViewFor(room, playerId) {
     known: g?.known?.get(playerId) ?? {},
     hasPeeked: g?.hasPeeked?.has(playerId) ?? false,
     pendingDraw: g?.pendingDraw?.get(playerId) ?? null,
+    // One-shot Queen result, only ever sent to the player who used the Queen
+    queenReveal: g?.peekRevealFor?.[playerId] ?? null,
   };
 }
 
@@ -596,7 +598,8 @@ io.on("connection", (socket) => {
 
       const card = hand[ti];
       if (!g.peekRevealFor) g.peekRevealFor = {};
-      g.peekRevealFor[socket.id] = { card, targetPlayerId, targetIndex: ti };
+      const targetName = room.players.find((p) => p.id === targetPlayerId)?.name ?? "?";
+      g.peekRevealFor[socket.id] = { card, targetPlayerId, targetName, targetIndex: ti };
 
       if (targetPlayerId === socket.id) {
         const myKnown = g.known.get(socket.id) ?? {};
@@ -607,7 +610,6 @@ io.on("connection", (socket) => {
       const actor = room.players.find((p) => p.id === socket.id)?.name ?? "?";
       const tName = room.players.find((p) => p.id === targetPlayerId)?.name ?? targetPlayerId;
       io.to(roomId).emit("log", `${actor} used Queen to peek a card from ${tName}.`);
-      io.to(socket.id).emit("log", `Queen peek result: ${tName}[${ti}] = ${card}`);
 
       completeTurnAction(room, roomId, socket.id);
       broadcastRoom(roomId);

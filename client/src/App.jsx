@@ -213,6 +213,8 @@ export default function App() {
   const [log, setLog]         = useState([]);
   const [room, setRoom]       = useState(null);
   const [me, setMe]           = useState(null);
+  const [queenReveal, setQueenReveal] = useState(null); // private: card the player just peeked with a Queen
+  const queenRevealTimerRef = useRef(null);
 
   const [lookCount, setLookCount]   = useState(2);
   const [peekPick, setPeekPick]     = useState([]);
@@ -277,6 +279,11 @@ export default function App() {
 
     const onMeUpdate = (data) => {
       setMe(data);
+      if (data?.queenReveal) {
+        setQueenReveal(data.queenReveal);
+        clearTimeout(queenRevealTimerRef.current);
+        queenRevealTimerRef.current = setTimeout(() => setQueenReveal(null), 15000);
+      }
       const newKnown  = data?.known ?? {};
       const prevKnown = prevKnownRef.current;
 
@@ -659,6 +666,20 @@ export default function App() {
                       ✓ Peek confirmed! Waiting for other players…
                     </div>
                   )}
+                </Panel>
+              )}
+
+              {/* QUEEN PEEK RESULT (private to the player who used the Queen) */}
+              {queenReveal && (
+                <Panel title="♛ Queen Peek Result">
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                    <CardFace card={queenReveal.card} size="lg" />
+                    <div style={{ fontSize: 14 }}>
+                      <b style={{ color: "#ffd700" }}>{queenReveal.targetName}</b>'s card #{queenReveal.targetIndex}
+                      <div style={{ fontSize: 12, color: "#a89060", marginTop: 6 }}>Only you can see this. Hides in 15 seconds.</div>
+                      <Btn variant="ghost" style={{ marginTop: 8 }} onClick={() => setQueenReveal(null)}>Hide</Btn>
+                    </div>
+                  </div>
                 </Panel>
               )}
 
