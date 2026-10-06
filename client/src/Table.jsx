@@ -231,18 +231,21 @@ export default function Table(props) {
   const n = others.length;
   const tableHeight = props.height ?? 620;
   const compact = tableHeight < 580;
+  const tiny = tableHeight < 440;
+  const pileSize = mobile ? "md" : tiny ? "sm" : compact ? "md" : "lg";
+  const pileDims = { sm: [48, 68], md: [58, 82], lg: [88, 124] }[pileSize];
   const oppSize = mobile || n >= 4 || compact ? "xs" : "sm";
 
   const center = (
     <div style={{ display: "flex", gap: mobile ? 18 : 28, alignItems: "center", justifyContent: "center" }}>
       <div data-slot="deck" style={{ textAlign: "center" }}>
-        <CardBack size={mobile || compact ? "md" : "lg"} />
+        <CardBack size={pileSize} />
         <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Deck · {room.deckCount}</div>
       </div>
       <div data-slot="discard" style={{ textAlign: "center" }}>
         {room.discardTop
-          ? <CardFace key={room.discardTop} card={room.discardTop} size={mobile || compact ? "md" : "lg"} style={{ animation: "cardPop 0.35s ease-out" }} />
-          : <div style={{ width: mobile || compact ? 58 : 88, height: mobile || compact ? 82 : 124, border: "2px dashed rgba(255,255,255,0.25)", borderRadius: 8 }} />}
+          ? <CardFace key={room.discardTop} card={room.discardTop} size={pileSize} style={{ animation: "cardPop 0.35s ease-out" }} />
+          : <div style={{ width: pileDims[0], height: pileDims[1], border: "2px dashed rgba(255,255,255,0.25)", borderRadius: 8 }} />}
         <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Discard</div>
       </div>
     </div>
@@ -288,14 +291,14 @@ export default function Table(props) {
       {others.map((p, k) => {
         const theta = Math.PI + ((k + 1) / (n + 1)) * Math.PI;
         const x = 50 + 36 * Math.cos(theta);
-        const y = 30 + 22 * Math.sin(theta) + 10;
+        const y = 30 + 22 * Math.sin(theta) + (tiny ? 5 : 10);
         return (
           <div key={p.id} style={{ position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)" }}>
             <OpponentSeat {...seatProps(p)} />
           </div>
         );
       })}
-      <div style={{ position: "absolute", left: "50%", top: compact ? "44%" : "47%", transform: "translate(-50%, -50%)" }}>{center}</div>
+      <div style={{ position: "absolute", left: "50%", top: tiny ? "41%" : compact ? "44%" : "47%", transform: "translate(-50%, -50%)" }}>{center}</div>
       <div style={{ position: "absolute", left: "50%", bottom: 8, transform: "translateX(-50%)", width: "80%" }}>{mySeat}</div>
       {arrowLayer}
     </div>

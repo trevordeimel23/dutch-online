@@ -138,6 +138,15 @@ export default function App() {
   const windowHeight   = useWindowHeight();
   playersRef.current   = room?.players ?? [];
   const [graceLeft, setGraceLeft] = useState(0);
+  const [dockEl, setDockEl]     = useState(null);
+  const [dockHeight, setDockHeight] = useState(140);
+  useEffect(() => {
+    if (!dockEl) return undefined;
+    const ro = new ResizeObserver(() => setDockHeight(dockEl.offsetHeight));
+    ro.observe(dockEl);
+    setDockHeight(dockEl.offsetHeight);
+    return () => ro.disconnect();
+  }, [dockEl]);
   const [jackStep, setJackStep]     = useState(0); // which Jack target the next table tap fills in
 
   // Dutch window countdown
@@ -189,7 +198,7 @@ export default function App() {
   }
 
   function addAction(text, color) {
-    setActions((prev) => [...prev.slice(-2), { text, color, id: Date.now() + Math.random() }]);
+    setActions((prev) => [...prev.slice(-1), { text, color, id: Date.now() + Math.random() }]);
   }
 
   useEffect(() => {
@@ -416,7 +425,10 @@ export default function App() {
       setQueenTarget({ playerId: pid, index: idx });
     }
   };
-  const tableHeight = Math.max(450, Math.min(640, windowHeight - 320));
+  // header (~52) + page padding (~48) + action caption (44) + gaps (32) + the dock itself
+  // On short windows drop the caption strip and padding (the sidebar log still shows the moves)
+  const shortWin = windowHeight < 720;
+  const tableHeight = Math.max(380, Math.min(640, windowHeight - (shortWin ? 100 : 176) - dockHeight));
   const myAttention = !!room?.finalGraceEndsAt || isMyTurn || !!myEffect || inDutchWindow || room?.revealHold === socket.id;
   const marks = {};
   if (phase === "PEEK" && !me?.hasPeeked) for (const i of peekPick) marks[`${socket.id}:${i}`] = "pick";
@@ -512,7 +524,7 @@ export default function App() {
       </div>
 
       {/* ── Main content ───────────────────────────────────────────────────── */}
-      <div style={{ maxWidth: 1400, width: "100%", margin: "0 auto", padding: mobile ? "12px 10px" : "24px 28px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 1400, width: "100%", margin: "0 auto", padding: mobile ? "12px 10px" : shortWin ? "12px 28px" : "24px 28px", boxSizing: "border-box" }}>
 
         {/* ── LANDING: join a room ───────────────────────────────────────── */}
         {!room && (
@@ -697,8 +709,9 @@ export default function App() {
               {/* TABLE (top-down view of everyone's cards) */}
               {room && phase !== "LOBBY" && (
                 <>
-                {actions.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "5px 12px", background: "rgba(0,0,0,0.35)", borderRadius: 10, minHeight: 20 }}>
+                {((!mobile && !shortWin) || (mobile && actions.length > 0)) && (
+                  <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 2, padding: "4px 12px", background: "rgba(0,0,0,0.35)", borderRadius: 10, height: mobile ? undefined : 44, boxSizing: "border-box", overflow: "hidden" }}>
+                    {actions.length === 0 && <div style={{ fontSize: 12, color: "#7fa07f" }}>Moves will show up here…</div>}
                     {actions.map((a, idx) => (
                       <div key={a.id} style={{
                         fontSize: idx === actions.length - 1 ? 14 : 11, fontWeight: idx === actions.length - 1 ? "bold" : "normal",
@@ -730,7 +743,7 @@ export default function App() {
 
               {/* ── ACTION DOCK: stays on screen so you never have to scroll for your options ── */}
               {room && phase !== "LOBBY" && (
-              <div style={{
+              <div ref={setDockEl} style={{
                 position: "sticky", bottom: 0, zIndex: 30,
                 display: "flex", flexDirection: "column", gap: 10,
                 padding: mobile ? 8 : 12,
