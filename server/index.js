@@ -45,6 +45,7 @@ function getRoomOrThrow(roomId) {
 function isPlayersTurn(room, playerId) {
   const g = room.game;
   if (!g || g.phase !== "PLAY") return false;
+  if (g.finalGraceEndsAt) return false; // last turn is over; only matching is still allowed
   if (g.revealHold) return false; // round is waiting for the last player to look at their Queen peek
   return room.players[g.turnIndex]?.id === playerId;
 }
@@ -168,6 +169,26 @@ function scoreRound(room, roomId) {
   g.winnerId = winnerId;
 }
 
+const FINAL_GRACE_MS = 10000;
+
+// Last turn after Dutch is done: everyone gets a short window for last-second matches before scoring
+function startFinalGrace(room, roomId) {
+  const g = room.game;
+  g.pendingEffect = null;
+  g.finalGraceEndsAt = Date.now() + FINAL_GRACE_MS;
+  clearDutchWindow(room, roomId);
+  const timer = setTimeout(() => {
+    const r = rooms.get(roomId);
+    if (!r?.game?.finalGraceEndsAt) return;
+    r.game.finalGraceEndsAt = null;
+    roomTimers.delete(roomId);
+    scoreRound(r, roomId);
+    broadcastRoom(roomId);
+  }, FINAL_GRACE_MS);
+  roomTimers.set(roomId, timer);
+  io.to(roomId).emit("log", "That was the last turn! 10 seconds for any last-second matches…");
+}
+
 function nextTurn(room, roomId) {
   const g = room.game;
   if (!g) return;
@@ -176,7 +197,7 @@ function nextTurn(room, roomId) {
   if (g.dutchCallerId !== null) {
     g.dutchTurnsLeft = (g.dutchTurnsLeft ?? 0) - 1;
     if (g.dutchTurnsLeft <= 0) {
-      scoreRound(room, roomId);
+      startFinalGrace(room, roomId);
       return;
     }
   }
@@ -220,9 +241,10 @@ function publicRoomView(room) {
     lookCount: g?.lookCount ?? 0,
     discardTop: g?.discardTop ?? null,
     deckCount: g?.deck?.length ?? 0,
-    turnPlayerId: g?.phase === "PLAY" ? room.players[g.turnIndex]?.id ?? null : null,
+    turnPlayerId: g?.phase === "PLAY" && !g.finalGraceEndsAt ? room.players[g.turnIndex]?.id ?? null : null,
     pendingEffect: g?.pendingEffect ?? null,
     revealHold: g?.revealHold ?? null,
+    finalGraceEndsAt: g?.finalGraceEndsAt ?? null,
     handSizes: Object.fromEntries(room.players.map((p) => [p.id, g?.hands?.get(p.id)?.length ?? 0])),
     reorders: g?.reorders ?? {},
     drawn: publicDrawnCard(g),
@@ -435,11 +457,9 @@ io.on("connection", (socket) => {
       if (g.dutchCallerId) { emitError(socket.id, "Dutch already called."); return; }
       if (g.pendingEffect) { emitError(socket.id, "Resolve the pending effect first."); return; }
 
-      const inWindow = g.dutchWindowPlayerId === socket.id;
-      const atStartOfTurn = isPlayersTurn(room, socket.id) && !g.pendingDraw?.get(socket.id);
-
-      if (!inWindow && !atStartOfTurn) {
-        emitError(socket.id, "You can only call Dutch on your turn before drawing, or right after discarding.");
+      // You must draw and discard first; Dutch can only be called in the window right after your discard
+      if (g.dutchWindowPlayerId !== socket.id) {
+        emitError(socket.id, "You must draw and discard a card first. Then you can call Dutch.");
         return;
       }
 
@@ -483,6 +503,7 @@ io.on("connection", (socket) => {
       const room = getRoomOrThrow(roomId);
       const g = room.game;
       if (!g || g.phase !== "PLAY") return;
+      if (g.finalGraceEndsAt) return;
       if (g.dutchCallerId === socket.id) { emitError(socket.id, "You can't rearrange your cards after calling Dutch."); return; }
       const hand = g.hands.get(socket.id);
       const f = Number(from), t = Number(to);

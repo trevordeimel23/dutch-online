@@ -132,6 +132,7 @@ export default function App() {
   const prevDutchRef   = useRef(undefined);
   const logRef         = useRef(null);
   const windowHeight   = useWindowHeight();
+  const [graceLeft, setGraceLeft] = useState(0);
   const [jackStep, setJackStep]     = useState(0); // which Jack target the next table tap fills in
 
   // Dutch window countdown
@@ -307,6 +308,16 @@ export default function App() {
     document.title = myTurnNow ? "▶ Your turn! — Dutch" : "Dutch";
   }, [myTurnNow]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Countdown for the final match window
+  useEffect(() => {
+    const endsAt = room?.finalGraceEndsAt;
+    if (!endsAt) { setGraceLeft(0); return undefined; }
+    const tick = () => setGraceLeft(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [room?.finalGraceEndsAt]);
+
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log.length]);
@@ -339,9 +350,6 @@ export default function App() {
   const dutchCallerName = room?.players?.find((p) => p.id === dutchCallerId)?.name;
   const inDutchWindow = room?.dutchWindowPlayerId === socket.id;
 
-  const canCallDutch = phase === "PLAY" && !dutchCallerId && !pendingEffect &&
-    (inDutchWindow || (isMyTurn && !pending));
-
   const totals  = room?.totals  ?? {};
 
   const selIdx      = Math.min(matchIndex, Math.max(handSize - 1, 0));
@@ -362,7 +370,7 @@ export default function App() {
     }
   };
   const tableHeight = Math.max(460, Math.min(640, windowHeight - 285));
-  const myAttention = isMyTurn || !!myEffect || inDutchWindow || room?.revealHold === socket.id;
+  const myAttention = !!room?.finalGraceEndsAt || isMyTurn || !!myEffect || inDutchWindow || room?.revealHold === socket.id;
   const marks = {};
   if (targetMode === "JACK") {
     marks[`${jackA.playerId}:${jackA.index}`] = "pick";
@@ -732,14 +740,16 @@ export default function App() {
                     letterSpacing: myAttention ? "0.04em" : undefined,
                     textShadow: myAttention ? "0 1px 0 rgba(255,255,255,0.4)" : undefined,
                   }}>
-                    {room?.revealHold === socket.id
+                    {room?.finalGraceEndsAt
+                      ? `⏳ Last chance to match! Scoring in ${graceLeft}s`
+                      : room?.revealHold === socket.id
                       ? "👁 Take a look — then press Done"
                       : myEffect
                         ? `⚡ Use your ${myEffect.type}!`
                         : inDutchWindow
                           ? "🔔 Call Dutch, or pass your turn"
                           : isMyTurn
-                            ? (pending ? "▶ YOUR TURN — discard it or swap it in" : "▶ YOUR TURN — draw a card or call Dutch")
+                            ? (pending ? "▶ YOUR TURN — discard it or swap it in" : "▶ YOUR TURN — draw a card")
                             : <>Waiting for <b style={{ color: "#e8d5a3" }}>{players.find((p) => p.id === room?.turnPlayerId)?.name ?? "…"}</b>…</>}
                   </div>
                   {handSize > 0 && !room?.revealHold && (
@@ -798,14 +808,6 @@ export default function App() {
                         style={{ fontSize: 16, padding: mobile ? "12px 16px" : "12px 22px" }}
                       >
                         ↑ Take Discard
-                      </Btn>
-                      <Btn
-                        variant={canCallDutch ? "danger" : "ghost"}
-                        disabled={!canCallDutch}
-                        onClick={() => socket.emit("dutch:call", { roomId })}
-                        style={{ fontSize: 16, padding: mobile ? "12px 16px" : "12px 22px" }}
-                      >
-                        🔔 Call Dutch
                       </Btn>
                     </>
                   )}
