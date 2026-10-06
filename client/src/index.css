@@ -74,3 +74,19 @@ button:focus-visible {
   70% { transform: scale(1.08) rotate(2deg); opacity: 1; }
   100% { transform: scale(1) rotate(0); }
 }
+
+@keyframes dockGlow {
+  0%, 100% { box-shadow: 0 -6px 24px rgba(0,0,0,0.55), 0 0 6px rgba(255,215,0,0.4); }
+  50% { box-shadow: 0 -6px 24px rgba(0,0,0,0.55), 0 0 26px rgba(255,215,0,0.95); }
+}
+@keyframes bannerPop {
+  0% { transform: scale(0.3); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes bannerShake {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  20% { transform: translateX(-14px) rotate(-2deg); }
+  40% { transform: translateX(14px) rotate(2deg); }
+  60% { transform: translateX(-10px) rotate(-1deg); }
+  80% { transform: translateX(10px) rotate(1deg); }
+}

@@ -4,6 +4,38 @@ import { io } from "socket.io-client";
 import { useIsMobile, CardFace, CardBack } from "./cards.jsx";
 import Table from "./Table.jsx";
 
+// Short two-tone chime (silently skipped if the browser blocks audio)
+function playChime(freqs = [660, 880]) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    freqs.forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = f;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + i * 0.14);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + i * 0.14 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.14 + 0.35);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.14);
+      osc.stop(ctx.currentTime + i * 0.14 + 0.4);
+    });
+    setTimeout(() => ctx.close(), 1200);
+  } catch { /* audio is optional */ }
+}
+
+function useWindowHeight() {
+  const [h, setH] = useState(() => window.innerHeight);
+  useEffect(() => {
+    const onResize = () => setH(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return h;
+}
+
 // ── Reusable styled components ──────────────────────────────────────────────
 
 function Btn({ children, onClick, disabled, variant = "default", style: extra }) {
@@ -94,6 +126,12 @@ export default function App() {
 
   // Highlights from table events: "playerId:slot" -> kind (swap | moved | jack | queen | penalty | fail)
   const [highlights, setHighlights] = useState({});
+  const [banner, setBanner]       = useState(null); // full-screen pop: { kind: "turn" | "dutch", text, sub }
+  const bannerTimerRef = useRef(null);
+  const prevTurnRef    = useRef(null);
+  const prevDutchRef   = useRef(undefined);
+  const logRef         = useRef(null);
+  const windowHeight   = useWindowHeight();
   const [jackStep, setJackStep]     = useState(0); // which Jack target the next table tap fills in
 
   // Dutch window countdown
@@ -239,6 +277,40 @@ export default function App() {
     return () => { if (dutchWindowTickRef.current) clearInterval(dutchWindowTickRef.current); };
   }, [room?.dutchWindowEndsAt, room?.dutchWindowPlayerId, socket.id]);
 
+  function showBanner(b, ms) {
+    setBanner(b);
+    clearTimeout(bannerTimerRef.current);
+    bannerTimerRef.current = setTimeout(() => setBanner(null), ms);
+  }
+
+  // Big pop when someone calls Dutch
+  useEffect(() => {
+    const caller = room?.dutchCallerId ?? null;
+    if (prevDutchRef.current !== undefined && caller && prevDutchRef.current !== caller) {
+      const callerName = room.players.find((p) => p.id === caller)?.name ?? "Someone";
+      showBanner({ kind: "dutch", text: `${callerName} calls Dutch!`, sub: "Everyone else gets one more turn" }, 3200);
+      playChime([523, 392, 262]);
+    }
+    prevDutchRef.current = caller;
+  }, [room?.dutchCallerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pop + chime + tab title when it becomes your turn
+  const myTurnNow = room?.phase === "PLAY" && room?.turnPlayerId === socket.id;
+  useEffect(() => {
+    if (myTurnNow && prevTurnRef.current !== true) {
+      setBanner((b) => (b?.kind === "dutch" ? b : { kind: "turn", text: "Your turn!", sub: "" }));
+      clearTimeout(bannerTimerRef.current);
+      bannerTimerRef.current = setTimeout(() => setBanner((b) => (b?.kind === "turn" ? null : b)), 1400);
+      playChime();
+    }
+    prevTurnRef.current = myTurnNow;
+    document.title = myTurnNow ? "▶ Your turn! — Dutch" : "Dutch";
+  }, [myTurnNow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log.length]);
+
   const join     = () => socket.emit("room:join",   { roomId, name });
   const start    = () => socket.emit("game:start",  { roomId, lookCount });
   const newRound = () => socket.emit("game:newRound", { roomId, lookCount });
@@ -289,6 +361,8 @@ export default function App() {
       setQueenTarget({ playerId: pid, index: idx });
     }
   };
+  const tableHeight = Math.max(460, Math.min(640, windowHeight - 285));
+  const myAttention = isMyTurn || !!myEffect || inDutchWindow || room?.revealHold === socket.id;
   const marks = {};
   if (targetMode === "JACK") {
     marks[`${jackA.playerId}:${jackA.index}`] = "pick";
@@ -304,7 +378,7 @@ export default function App() {
     fontFamily: "Georgia, 'Times New Roman', serif",
     color: "#e8d5a3",
     padding: "0 0 40px 0",
-    overflowX: "hidden",
+    overflowX: "clip", // not "hidden": that would break the sticky action dock
   };
 
   // ── INPUT style ─────────────────────────────────────────────────────────────
@@ -331,6 +405,36 @@ export default function App() {
   // ── RENDER ──────────────────────────────────────────────────────────────────
   return (
     <div style={feltBg}>
+
+      {/* ── Big pops: "Your turn!" and "X calls Dutch!" ───────────────────── */}
+      {banner && (
+        <div
+          onClick={() => setBanner(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: banner.kind === "dutch" ? "rgba(0,0,0,0.65)" : "transparent",
+            pointerEvents: banner.kind === "dutch" ? "auto" : "none",
+          }}
+        >
+          <div key={banner.text} style={{
+            textAlign: "center", padding: mobile ? "22px 26px" : "36px 64px", borderRadius: 24,
+            background: banner.kind === "dutch"
+              ? "linear-gradient(to bottom, #e74c3c, #a93226)"
+              : "linear-gradient(to bottom, #ffd700, #e0a800)",
+            color: banner.kind === "dutch" ? "#fff" : "#2a1a00",
+            border: "4px solid #fff3b0",
+            boxShadow: "0 0 60px rgba(255,215,0,0.7), 0 12px 40px rgba(0,0,0,0.6)",
+            animation: banner.kind === "dutch" ? "bannerPop 0.5s cubic-bezier(.2,1.4,.4,1), bannerShake 0.5s 0.5s" : "bannerPop 0.35s cubic-bezier(.2,1.4,.4,1)",
+            maxWidth: "90vw",
+          }}>
+            <div style={{ fontSize: mobile ? 34 : banner.kind === "dutch" ? 64 : 52, fontWeight: "bold", letterSpacing: "0.03em", lineHeight: 1.1 }}>
+              {banner.kind === "dutch" ? "🔔 " : "▶ "}{banner.text}
+            </div>
+            {banner.sub && <div style={{ fontSize: mobile ? 16 : 24, marginTop: 12, opacity: 0.9 }}>{banner.sub}</div>}
+          </div>
+        </div>
+      )}
 
       {/* ── Header bar ─────────────────────────────────────────────────────── */}
       <div style={{
@@ -519,6 +623,16 @@ export default function App() {
                   )}
                 </Panel>
               )}
+
+              {!mobile && log.length > 0 && (
+                <Panel title="Activity Log">
+                  <div ref={logRef} style={{ maxHeight: 220, overflowY: "auto", fontSize: 12, color: "#a89060" }}>
+                    {log.slice(-40).map((l, i) => (
+                      <div key={i} style={{ padding: "2px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>{l}</div>
+                    ))}
+                  </div>
+                </Panel>
+              )}
             </div>
 
             {/* Right column: main game area */}
@@ -527,6 +641,7 @@ export default function App() {
               {/* TABLE (top-down view of everyone's cards) */}
               {room && phase !== "LOBBY" && (
                 <Table
+                  height={tableHeight}
                   room={room} meId={socket.id} me={me}
                   getVisibleCard={getVisibleCard}
                   highlights={highlights} marks={marks}
@@ -539,6 +654,20 @@ export default function App() {
                   onSeatClick={(pid) => setAceTarget(pid)}
                 />
               )}
+
+              {/* ── ACTION DOCK: stays on screen so you never have to scroll for your options ── */}
+              {room && phase !== "LOBBY" && (
+              <div style={{
+                position: "sticky", bottom: 0, zIndex: 30,
+                display: "flex", flexDirection: "column", gap: 10,
+                padding: mobile ? 8 : 12,
+                background: "linear-gradient(to top, rgba(6,22,8,0.98), rgba(10,34,12,0.94))",
+                border: myAttention ? "2px solid #ffd700" : "1px solid rgba(255,255,255,0.15)",
+                borderRadius: 14,
+                boxShadow: "0 -6px 24px rgba(0,0,0,0.55)",
+                maxHeight: mobile ? "55vh" : "46vh", overflowY: "auto",
+                animation: myAttention ? "dockGlow 1.4s ease-in-out infinite" : undefined,
+              }}>
 
               {/* PEEK PHASE */}
               {me && phase === "PEEK" && (
@@ -592,25 +721,43 @@ export default function App() {
                 </Panel>
               )}
 
-              {/* HAND ACTIONS */}
-              {me && phase === "PLAY" && handSize > 0 && (
-                <Panel title={`Your Cards${peekTimeLeft > 0 ? ` — peeked cards hide in ${peekTimeLeft}s` : ""}`}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 12, color: "#a89060" }}>Selected card #{selIdx} (tap a card to select):</span>
+              {/* TURN BANNER + MATCH */}
+              {me && phase === "PLAY" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{
+                    flex: "1 1 220px", padding: myAttention ? "10px 16px" : "6px 12px", borderRadius: 10,
+                    background: myAttention ? "linear-gradient(to bottom, #ffd700, #e0a800)" : "rgba(255,255,255,0.06)",
+                    color: myAttention ? "#2a1a00" : "#a89060",
+                    fontWeight: "bold", fontSize: myAttention ? (mobile ? 18 : 22) : 13,
+                    letterSpacing: myAttention ? "0.04em" : undefined,
+                    textShadow: myAttention ? "0 1px 0 rgba(255,255,255,0.4)" : undefined,
+                  }}>
+                    {room?.revealHold === socket.id
+                      ? "👁 Take a look — then press Done"
+                      : myEffect
+                        ? `⚡ Use your ${myEffect.type}!`
+                        : inDutchWindow
+                          ? "🔔 Call Dutch, or pass your turn"
+                          : isMyTurn
+                            ? (pending ? "▶ YOUR TURN — discard it or swap it in" : "▶ YOUR TURN — draw a card or call Dutch")
+                            : <>Waiting for <b style={{ color: "#e8d5a3" }}>{players.find((p) => p.id === room?.turnPlayerId)?.name ?? "…"}</b>…</>}
+                  </div>
+                  {handSize > 0 && !room?.revealHold && (
                     <Btn
-                      disabled={!room?.discardTop || handSize === 0}
+                      disabled={!room?.discardTop}
                       onClick={() => socket.emit("match:attempt", { roomId, index: selIdx })}
                     >
-                      Attempt Match
+                      ✋ Match #{selIdx}
                     </Btn>
-                  </div>
-                </Panel>
+                  )}
+                  {peekTimeLeft > 0 && <span style={{ fontSize: 12, color: "#ffd700" }}>⏱ peeked cards hide in {peekTimeLeft}s</span>}
+                </div>
               )}
 
               {/* DUTCH WINDOW */}
               {inDutchWindow && (
                 <div style={{
-                  padding: "16px 20px",
+                  padding: "12px 16px",
                   background: "rgba(255,193,7,0.18)",
                   border: "2px solid rgba(255,193,7,0.7)",
                   borderRadius: 10,
@@ -620,12 +767,11 @@ export default function App() {
                   flexWrap: "wrap",
                   gap: 12,
                 }}>
-                  <div>
-                    <div style={{ fontWeight: "bold", fontSize: 16, color: "#ffd700", marginBottom: 4 }}>Call Dutch?</div>
-                    <div style={{ fontSize: 12, color: "#a89060" }}>Window closes in</div>
-                    <div style={{ fontSize: 36, fontWeight: "bold", color: dutchWindowSecondsLeft <= 3 ? "#e74c3c" : "#ffd700", lineHeight: 1 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                    <span style={{ fontSize: 12, color: "#a89060" }}>Window closes in</span>
+                    <span style={{ fontSize: 32, fontWeight: "bold", color: dutchWindowSecondsLeft <= 3 ? "#e74c3c" : "#ffd700", lineHeight: 1 }}>
                       {dutchWindowSecondsLeft}s
-                    </div>
+                    </span>
                   </div>
                   <div style={{ display: "flex", gap: 10 }}>
                     <Btn variant="danger" onClick={() => socket.emit("dutch:call", { roomId })}>🔔 Call Dutch</Btn>
@@ -635,63 +781,61 @@ export default function App() {
               )}
 
               {/* TURN CONTROLS */}
-              {me && phase === "PLAY" && !myEffect && !inDutchWindow && !room?.revealHold && (
-                <Panel title={isMyTurn ? "Your Turn" : "Waiting…"}>
-                  {isMyTurn
-                    ? <div style={{ fontSize: 13, color: "#81c784", marginBottom: 12 }}>▶ It's your turn! Draw a card or call Dutch.</div>
-                    : <div style={{ fontSize: 13, color: "#a89060", marginBottom: 12 }}>Waiting for <b style={{ color: "#e8d5a3" }}>{players.find(p => p.id === room?.turnPlayerId)?.name ?? "..."}</b> to play.</div>
-                  }
-
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                    <Btn
-                      disabled={!isMyTurn || !!pending || !!pendingEffect}
-                      onClick={() => socket.emit("turn:draw", { roomId, source: "DECK" })}
-                    >
-                      🂠 Draw from Deck
-                    </Btn>
-                    <Btn
-                      disabled={!isMyTurn || !!pending || !room.discardTop || !!pendingEffect}
-                      onClick={() => socket.emit("turn:draw", { roomId, source: "DISCARD" })}
-                    >
-                      ↑ Take Discard
-                    </Btn>
-                    <Btn
-                      variant={canCallDutch ? "danger" : "ghost"}
-                      disabled={!canCallDutch}
-                      onClick={() => socket.emit("dutch:call", { roomId })}
-                    >
-                      🔔 Call Dutch
-                    </Btn>
-                  </div>
+              {me && phase === "PLAY" && !myEffect && !inDutchWindow && !room?.revealHold && isMyTurn && (
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  {!pending && (
+                    <>
+                      <Btn
+                        disabled={!!pendingEffect}
+                        onClick={() => socket.emit("turn:draw", { roomId, source: "DECK" })}
+                        style={{ fontSize: 16, padding: mobile ? "12px 16px" : "12px 22px" }}
+                      >
+                        🂠 Draw from Deck
+                      </Btn>
+                      <Btn
+                        disabled={!room.discardTop || !!pendingEffect}
+                        onClick={() => socket.emit("turn:draw", { roomId, source: "DISCARD" })}
+                        style={{ fontSize: 16, padding: mobile ? "12px 16px" : "12px 22px" }}
+                      >
+                        ↑ Take Discard
+                      </Btn>
+                      <Btn
+                        variant={canCallDutch ? "danger" : "ghost"}
+                        disabled={!canCallDutch}
+                        onClick={() => socket.emit("dutch:call", { roomId })}
+                        style={{ fontSize: 16, padding: mobile ? "12px 16px" : "12px 22px" }}
+                      >
+                        🔔 Call Dutch
+                      </Btn>
+                    </>
+                  )}
 
                   {/* Drawn card options */}
                   {pending && (
-                    <div style={{ marginTop: 4, padding: "12px 14px", background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)" }}>
-                      <div style={{ fontSize: 13, color: "#a89060", marginBottom: 10 }}>
-                        Drawn from <b style={{ color: "#e8d5a3" }}>{pending.source}</b>:
+                    <>
+                      <div style={{ textAlign: "center" }}>
+                        <CardFace card={pending.card} size="md" highlight="swap" />
+                        <div style={{ fontSize: 10, color: "#a89060", marginTop: 4 }}>from {pending.source.toLowerCase()}</div>
                       </div>
-                      <div style={{ display: "flex", alignItems: "flex-end", gap: 20, flexWrap: "wrap" }}>
-                        <div>
-                          <CardFace card={pending.card} size="lg" />
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          <Btn
-                            disabled={!isMyTurn || pending.source !== "DECK"}
-                            onClick={() => socket.emit("turn:discard-drawn", { roomId })}
-                          >
-                            Discard it
-                          </Btn>
-                          <Btn
-                            disabled={!isMyTurn}
-                            onClick={() => socket.emit("turn:swap", { roomId, index: selIdx })}
-                          >
-                            Swap into selected card (#{selIdx})
-                          </Btn>
-                        </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <Btn
+                          disabled={pending.source !== "DECK"}
+                          onClick={() => socket.emit("turn:discard-drawn", { roomId })}
+                          style={{ fontSize: 16, padding: "10px 20px" }}
+                        >
+                          Discard it
+                        </Btn>
+                        <Btn
+                          onClick={() => socket.emit("turn:swap", { roomId, index: selIdx })}
+                          style={{ fontSize: 16, padding: "10px 20px" }}
+                        >
+                          Swap into card #{selIdx}
+                        </Btn>
                       </div>
-                    </div>
+                      <div style={{ fontSize: 12, color: "#a89060", maxWidth: 200 }}>Tap one of your cards on the table to choose which one to swap.</div>
+                    </>
                   )}
-                </Panel>
+                </div>
               )}
 
               {/* JACK EFFECT */}
@@ -763,12 +907,14 @@ export default function App() {
                 </Panel>
               )}
 
+              </div>
+              )}
             </div>{/* end right column */}
           </div>
         )}
 
         {/* ── Activity log ─────────────────────────────────────────────────── */}
-        {log.length > 0 && (
+        {(mobile || phase === "SCORING") && log.length > 0 && (
           <div style={{ marginTop: 24 }}>
             <Panel title="Activity Log">
               <div style={{ maxHeight: 130, overflowY: "auto", fontSize: 12, color: "#a89060" }}>

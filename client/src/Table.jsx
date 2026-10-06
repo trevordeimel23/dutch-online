@@ -69,7 +69,7 @@ function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCar
 }
 
 function MySeat({
-  player, meId, room, me, getVisibleCard, highlights, marks, selectedIndex,
+  compact, player, meId, room, me, getVisibleCard, highlights, marks, selectedIndex,
   canReorder, onReorder, onMyCardClick, targetMode, onCardClick,
 }) {
   const handSize = me?.handSize ?? 0;
@@ -156,7 +156,7 @@ function MySeat({
           </div>
         )}
       </div>
-      {canReorder && handSize > 1 && (
+      {canReorder && handSize > 1 && !compact && (
         <div style={{ fontSize: 11, color: "#7fa07f", marginTop: 2 }}>Drag your cards to rearrange them — everyone can see that you did</div>
       )}
     </div>
@@ -172,18 +172,20 @@ export default function Table(props) {
   // Seat everyone else clockwise starting from your left
   const others = meIdx === -1 ? players : [...players.slice(meIdx + 1), ...players.slice(0, meIdx)];
   const n = others.length;
-  const oppSize = mobile || n >= 4 ? "xs" : "sm";
+  const tableHeight = props.height ?? 620;
+  const compact = tableHeight < 580;
+  const oppSize = mobile || n >= 4 || compact ? "xs" : "sm";
 
   const center = (
     <div style={{ display: "flex", gap: mobile ? 18 : 28, alignItems: "center", justifyContent: "center" }}>
       <div style={{ textAlign: "center" }}>
-        <CardBack size={mobile ? "md" : "lg"} />
+        <CardBack size={mobile || compact ? "md" : "lg"} />
         <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Deck · {room.deckCount}</div>
       </div>
       <div style={{ textAlign: "center" }}>
         {room.discardTop
-          ? <CardFace key={room.discardTop} card={room.discardTop} size={mobile ? "md" : "lg"} style={{ animation: "cardPop 0.35s ease-out" }} />
-          : <div style={{ width: mobile ? 58 : 88, height: mobile ? 82 : 124, border: "2px dashed rgba(255,255,255,0.25)", borderRadius: 8 }} />}
+          ? <CardFace key={room.discardTop} card={room.discardTop} size={mobile || compact ? "md" : "lg"} style={{ animation: "cardPop 0.35s ease-out" }} />
+          : <div style={{ width: mobile || compact ? 58 : 88, height: mobile || compact ? 82 : 124, border: "2px dashed rgba(255,255,255,0.25)", borderRadius: 8 }} />}
         <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Discard</div>
       </div>
     </div>
@@ -197,7 +199,7 @@ export default function Table(props) {
 
   const mySeat = meP && (
     <MySeat
-      player={meP} meId={meId} room={room} me={me}
+      compact={compact} player={meP} meId={meId} room={room} me={me}
       getVisibleCard={props.getVisibleCard} highlights={highlights} marks={marks}
       selectedIndex={props.selectedIndex} canReorder={props.canReorder} onReorder={props.onReorder}
       onMyCardClick={props.onMyCardClick} targetMode={targetMode} onCardClick={props.onCardClick}
@@ -219,21 +221,21 @@ export default function Table(props) {
   // Desktop: oval table, other players spread along the top arc
   return (
     <div style={{
-      position: "relative", height: 620, borderRadius: "50% / 42%",
+      position: "relative", height: tableHeight, borderRadius: "50% / 42%",
       background: "radial-gradient(ellipse at center, #236b32 0%, #17482100 100%), radial-gradient(ellipse at center, #1f5c2c, #123a1b)",
       border: "6px solid #5a3d1e", boxShadow: "inset 0 0 60px rgba(0,0,0,0.5), 0 6px 18px rgba(0,0,0,0.5)",
     }}>
       {others.map((p, k) => {
         const theta = Math.PI + ((k + 1) / (n + 1)) * Math.PI;
         const x = 50 + 36 * Math.cos(theta);
-        const y = 30 + 22 * Math.sin(theta) + 12;
+        const y = 30 + 22 * Math.sin(theta) + 10;
         return (
           <div key={p.id} style={{ position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)" }}>
             <OpponentSeat {...seatProps(p)} />
           </div>
         );
       })}
-      <div style={{ position: "absolute", left: "50%", top: "47%", transform: "translate(-50%, -50%)" }}>{center}</div>
+      <div style={{ position: "absolute", left: "50%", top: compact ? "44%" : "47%", transform: "translate(-50%, -50%)" }}>{center}</div>
       <div style={{ position: "absolute", left: "50%", bottom: 8, transform: "translateX(-50%)", width: "80%" }}>{mySeat}</div>
     </div>
   );
