@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
-import { useIsMobile, CardFace, CardBack } from "./cards.jsx";
+import { useIsMobile, CardFace, CardBack, splitCard } from "./cards.jsx";
 import Table from "./Table.jsx";
 
 // Short two-tone chime (silently skipped if the browser blocks audio)
@@ -126,12 +126,17 @@ export default function App() {
 
   // Highlights from table events: "playerId:slot" -> kind (swap | moved | jack | queen | penalty | fail)
   const [highlights, setHighlights] = useState({});
+  const [arrows, setArrows]       = useState([]);   // arrows drawn on the table for a few seconds
+  const [actions, setActions]       = useState([]);   // last few things that happened, shown above the table
+  const lastDrawRef  = useRef(null);
+  const playersRef   = useRef([]);
   const [banner, setBanner]       = useState(null); // full-screen pop: { kind: "turn" | "dutch", text, sub }
   const bannerTimerRef = useRef(null);
   const prevTurnRef    = useRef(null);
   const prevDutchRef   = useRef(undefined);
   const logRef         = useRef(null);
   const windowHeight   = useWindowHeight();
+  playersRef.current   = room?.players ?? [];
   const [graceLeft, setGraceLeft] = useState(0);
   const [jackStep, setJackStep]     = useState(0); // which Jack target the next table tap fills in
 
@@ -174,7 +179,17 @@ export default function App() {
         for (const [key, kind] of entries) if (next[key] === kind) delete next[key];
         return next;
       });
-    }, 3500);
+    }, 6000);
+  }
+
+  function addArrows(list) {
+    const stamped = list.map((a, i) => ({ ...a, id: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}` }));
+    setArrows((prev) => [...prev, ...stamped]);
+    setTimeout(() => setArrows((prev) => prev.filter((a) => !stamped.some((s) => s.id === a.id))), 6000);
+  }
+
+  function addAction(text, color) {
+    setActions((prev) => [...prev.slice(-2), { text, color, id: Date.now() + Math.random() }]);
   }
 
   useEffect(() => {
@@ -228,12 +243,44 @@ export default function App() {
 
     const onTableEvent = (ev) => {
       const key = (pid, i) => `${pid}:${i}`;
-      if (ev.type === "swap")         addHighlights([[key(ev.playerId, ev.index), "swap"]]);
-      else if (ev.type === "reorder") addHighlights([[key(ev.playerId, ev.to), "moved"]]);
-      else if (ev.type === "match" && !ev.ok) addHighlights([[key(ev.playerId, ev.index), "fail"]]);
-      else if (ev.type === "jack")    addHighlights([[key(ev.a.playerId, ev.a.index), "jack"], [key(ev.b.playerId, ev.b.index), "jack"]]);
-      else if (ev.type === "queen")   addHighlights([[key(ev.targetPlayerId, ev.index), "queen"]]);
-      else if (ev.type === "ace")     addHighlights([[key(ev.targetPlayerId, ev.index), "penalty"]]);
+      const nameOf = (pid) => playersRef.current.find((p) => p.id === pid)?.name ?? "Someone";
+      const label = (card) => { const { rank, suit } = splitCard(card); return `${rank}${suit}`; };
+      const who = nameOf(ev.playerId);
+
+      if (ev.type === "draw") {
+        lastDrawRef.current = { playerId: ev.playerId, source: ev.source };
+        addAction(`${who} drew from the ${ev.source === "DECK" ? "deck" : "discard pile"}`, "#a8c8a8");
+      } else if (ev.type === "discard") {
+        addAction(`${who} discarded ${label(ev.card)}`, "#ffd700");
+      } else if (ev.type === "swap") {
+        const src = lastDrawRef.current?.playerId === ev.playerId ? lastDrawRef.current.source : "DECK";
+        addHighlights([[key(ev.playerId, ev.index), "swap"]]);
+        addArrows([
+          { from: src === "DECK" ? "deck" : "discard", to: key(ev.playerId, ev.index), color: "#66bb6a", label: "in" },
+          { from: key(ev.playerId, ev.index), to: "discard", color: "#ffd700", label: "out" },
+        ]);
+        addAction(`${who} swapped the drawn card into slot #${ev.index} — old card ${label(ev.card)} was discarded`, "#ffd700");
+      } else if (ev.type === "reorder") {
+        addHighlights([[key(ev.playerId, ev.to), "moved"]]);
+        addAction(`${who} moved card #${ev.from} to slot #${ev.to}`, "#4dd0e1");
+      } else if (ev.type === "match") {
+        if (ev.ok) {
+          addAction(`${who} matched with ${label(ev.card)} (their slot #${ev.index}) — it goes on the discard pile`, "#66bb6a");
+        } else {
+          addHighlights([[key(ev.playerId, ev.index), "fail"]]);
+          addAction(`${who} tried to match — wrong! Penalty card added (slot #${ev.index})`, "#ef5350");
+        }
+      } else if (ev.type === "jack") {
+        addHighlights([[key(ev.a.playerId, ev.a.index), "jack"], [key(ev.b.playerId, ev.b.index), "jack"]]);
+        addArrows([{ from: key(ev.a.playerId, ev.a.index), to: key(ev.b.playerId, ev.b.index), color: "#ce93d8", both: true, label: "swap" }]);
+        addAction(`${who} used Jack: ${nameOf(ev.a.playerId)}'s #${ev.a.index} ⇄ ${nameOf(ev.b.playerId)}'s #${ev.b.index}`, "#ce93d8");
+      } else if (ev.type === "queen") {
+        addHighlights([[key(ev.targetPlayerId, ev.index), "queen"]]);
+        addAction(`${who} peeked at ${nameOf(ev.targetPlayerId)}'s card #${ev.index}`, "#64b5f6");
+      } else if (ev.type === "ace") {
+        addHighlights([[key(ev.targetPlayerId, ev.index), "penalty"]]);
+        addAction(`${who} gave ${nameOf(ev.targetPlayerId)} a penalty card`, "#ef5350");
+      }
     };
 
     const onError = (e) => setLog((prev) => [...prev, `ERROR: ${e.message}`]);
@@ -357,7 +404,7 @@ export default function App() {
     const card = me?.known?.[i];
     return card && visibleCards[card] ? card : null;
   };
-  const canReorder  = phase === "PLAY" && dutchCallerId !== socket.id && handSize > 1;
+  const canReorder  = (phase === "PLAY" || phase === "PEEK") && dutchCallerId !== socket.id && handSize > 1;
   const targetMode  = myEffect?.type ?? null;
 
   // Tapping cards on the table fills in Jack / Queen targets
@@ -369,9 +416,10 @@ export default function App() {
       setQueenTarget({ playerId: pid, index: idx });
     }
   };
-  const tableHeight = Math.max(460, Math.min(640, windowHeight - 285));
+  const tableHeight = Math.max(450, Math.min(640, windowHeight - 320));
   const myAttention = !!room?.finalGraceEndsAt || isMyTurn || !!myEffect || inDutchWindow || room?.revealHold === socket.id;
   const marks = {};
+  if (phase === "PEEK" && !me?.hasPeeked) for (const i of peekPick) marks[`${socket.id}:${i}`] = "pick";
   if (targetMode === "JACK") {
     marks[`${jackA.playerId}:${jackA.index}`] = "pick";
     marks[`${jackB.playerId}:${jackB.index}`] = "pick";
@@ -648,7 +696,20 @@ export default function App() {
 
               {/* TABLE (top-down view of everyone's cards) */}
               {room && phase !== "LOBBY" && (
+                <>
+                {actions.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "5px 12px", background: "rgba(0,0,0,0.35)", borderRadius: 10, minHeight: 20 }}>
+                    {actions.map((a, idx) => (
+                      <div key={a.id} style={{
+                        fontSize: idx === actions.length - 1 ? 14 : 11, fontWeight: idx === actions.length - 1 ? "bold" : "normal",
+                        color: idx === actions.length - 1 ? a.color : "#7fa07f", opacity: idx === actions.length - 1 ? 1 : 0.8,
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                      }}>{a.text}</div>
+                    ))}
+                  </div>
+                )}
                 <Table
+                  arrows={arrows}
                   height={tableHeight}
                   room={room} meId={socket.id} me={me}
                   getVisibleCard={getVisibleCard}
@@ -656,11 +717,15 @@ export default function App() {
                   selectedIndex={phase === "PLAY" ? selIdx : -1}
                   canReorder={canReorder}
                   targetMode={targetMode} aceTarget={aceTarget}
-                  onReorder={(from, to) => { socket.emit("hand:reorder", { roomId, from, to }); setMatchIndex(to); }}
-                  onMyCardClick={(i) => phase === "PLAY" && setMatchIndex(i)}
+                  onReorder={(from, to) => { socket.emit("hand:reorder", { roomId, from, to }); setMatchIndex(to); setPeekPick([]); }}
+                  onMyCardClick={(i) => {
+                    if (phase === "PLAY") setMatchIndex(i);
+                    else if (phase === "PEEK" && !me?.hasPeeked) togglePeekIndex(i);
+                  }}
                   onCardClick={onTableCardClick}
                   onSeatClick={(pid) => setAceTarget(pid)}
                 />
+                </>
               )}
 
               {/* ── ACTION DOCK: stays on screen so you never have to scroll for your options ── */}
@@ -683,19 +748,7 @@ export default function App() {
                   {!me.hasPeeked ? (
                     <>
                       <div style={{ fontSize: 13, color: "#a89060", marginBottom: 14 }}>
-                        Select <b style={{ color: "#ffd700" }}>{effectiveLookCount}</b> card(s) to peek at. You'll have 15 seconds to memorize them.
-                      </div>
-                      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
-                        {[0, 1, 2, 3].map((i) => (
-                          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-                            <CardBack
-                              size="md"
-                              selected={peekPick.includes(i)}
-                              onClick={() => togglePeekIndex(i)}
-                              label={i}
-                            />
-                          </div>
-                        ))}
+                        Tap <b style={{ color: "#ffd700" }}>{effectiveLookCount}</b> of your cards on the table to peek at them (you'll have 15 seconds to memorize them). You can drag your cards to rearrange them first.
                       </div>
                       <Btn
                         variant="success"

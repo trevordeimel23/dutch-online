@@ -90,3 +90,8 @@ button:focus-visible {
   60% { transform: translateX(-10px) rotate(-1deg); }
   80% { transform: translateX(10px) rotate(1deg); }
 }
+
+@keyframes arrowFade {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}

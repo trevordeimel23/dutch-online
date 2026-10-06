@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { CardBack, CardFace, useIsMobile } from "./cards.jsx";
 
 // Top-down view of the table: you are always at the bottom, the other players sit around the top.
@@ -54,6 +54,7 @@ function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCar
             key={i}
             size={size}
             highlight={highlights[`${player.id}:${i}`] ?? marks[`${player.id}:${i}`]}
+            data-slot={`${player.id}:${i}`}
             onClick={clickable ? () => onCardClick(player.id, i) : undefined}
           />
         ))}
@@ -134,6 +135,7 @@ function MySeat({
             highlight: hl,
             label: i,
             "data-myslot": i,
+            "data-slot": `${meId}:${i}`,
             onPointerDown: (e) => down(e, i),
             onPointerMove: move,
             onPointerUp: up,
@@ -163,7 +165,62 @@ function MySeat({
   );
 }
 
+// Draws arrows between slots / piles so it's obvious which cards moved where
+function ArrowLayer({ rootRef, arrows, dep }) {
+  const [geo, setGeo] = useState([]);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+    const measure = () => {
+      const rr = root.getBoundingClientRect();
+      const center = (key) => {
+        const el = root.querySelector(`[data-slot="${key}"]`);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left - rr.left + r.width / 2, y: r.top - rr.top + r.height / 2 };
+      };
+      setGeo(arrows.map((a) => ({ ...a, p1: center(a.from), p2: center(a.to) })).filter((a) => a.p1 && a.p2));
+    };
+    measure();
+    const id = setTimeout(measure, 150); // positions settle once the new state has rendered
+    return () => clearTimeout(id);
+  }, [arrows, dep, rootRef]);
+
+  if (!geo.length) return null;
+  const colors = [...new Set(geo.map((g) => g.color))];
+  return (
+    <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 25, overflow: "visible" }}>
+      <defs>
+        {colors.map((col) => (
+          <marker key={col} id={`ah${col.replace("#", "")}`} markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="12" refY="8" orient="auto">
+            <path d="M0,0 L16,8 L0,16 z" fill={col} />
+          </marker>
+        ))}
+      </defs>
+      {geo.map((a) => {
+        const mx = (a.p1.x + a.p2.x) / 2, my = (a.p1.y + a.p2.y) / 2;
+        const dx = a.p2.x - a.p1.x, dy = a.p2.y - a.p1.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const bend = Math.min(60, len * 0.25);
+        const cx = mx - (dy / len) * bend, cy = my + (dx / len) * bend;
+        const id = `ah${a.color.replace("#", "")}`;
+        return (
+          <g key={a.id} style={{ animation: "arrowFade 6s ease-out forwards" }}>
+            <path d={`M${a.p1.x},${a.p1.y} Q${cx},${cy} ${a.p2.x},${a.p2.y}`} fill="none" stroke="#000" strokeOpacity="0.45" strokeWidth="7" strokeLinecap="round" />
+            <path d={`M${a.p1.x},${a.p1.y} Q${cx},${cy} ${a.p2.x},${a.p2.y}`} fill="none" stroke={a.color} strokeWidth="4" strokeLinecap="round"
+              markerEnd={`url(#${id})`} markerStart={a.both ? `url(#${id})` : undefined} strokeDasharray="10 6" />
+            {a.label && (
+              <text x={cx} y={cy} textAnchor="middle" fontSize="12" fontWeight="bold" fill="#fff" stroke="#000" strokeWidth="3" paintOrder="stroke" fontFamily="sans-serif">{a.label}</text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function Table(props) {
+  const rootRef = useRef(null);
   const { room, meId, me, highlights, marks, targetMode, aceTarget } = props;
   const mobile = useIsMobile();
   const players = room.players ?? [];
@@ -178,11 +235,11 @@ export default function Table(props) {
 
   const center = (
     <div style={{ display: "flex", gap: mobile ? 18 : 28, alignItems: "center", justifyContent: "center" }}>
-      <div style={{ textAlign: "center" }}>
+      <div data-slot="deck" style={{ textAlign: "center" }}>
         <CardBack size={mobile || compact ? "md" : "lg"} />
         <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Deck · {room.deckCount}</div>
       </div>
-      <div style={{ textAlign: "center" }}>
+      <div data-slot="discard" style={{ textAlign: "center" }}>
         {room.discardTop
           ? <CardFace key={room.discardTop} card={room.discardTop} size={mobile || compact ? "md" : "lg"} style={{ animation: "cardPop 0.35s ease-out" }} />
           : <div style={{ width: mobile || compact ? 58 : 88, height: mobile || compact ? 82 : 124, border: "2px dashed rgba(255,255,255,0.25)", borderRadius: 8 }} />}
@@ -206,21 +263,24 @@ export default function Table(props) {
     />
   );
 
+  const arrowLayer = <ArrowLayer rootRef={rootRef} arrows={props.arrows ?? []} dep={`${tableHeight}${mobile}${Object.values(room.handSizes ?? {}).join(",")}`} />;
+
   if (mobile) {
     return (
-      <div style={{ background: "radial-gradient(ellipse at center, #1f5c2c, #123a1b)", border: "3px solid #5a3d1e", borderRadius: 24, padding: "14px 6px", display: "flex", flexDirection: "column", gap: 18 }}>
+      <div ref={rootRef} style={{ position: "relative", background: "radial-gradient(ellipse at center, #1f5c2c, #123a1b)", border: "3px solid #5a3d1e", borderRadius: 24, padding: "14px 6px", display: "flex", flexDirection: "column", gap: 18 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
           {others.map((p) => <OpponentSeat key={p.id} {...seatProps(p)} />)}
         </div>
         {center}
         {mySeat}
+        {arrowLayer}
       </div>
     );
   }
 
   // Desktop: oval table, other players spread along the top arc
   return (
-    <div style={{
+    <div ref={rootRef} style={{
       position: "relative", height: tableHeight, borderRadius: "50% / 42%",
       background: "radial-gradient(ellipse at center, #236b32 0%, #17482100 100%), radial-gradient(ellipse at center, #1f5c2c, #123a1b)",
       border: "6px solid #5a3d1e", boxShadow: "inset 0 0 60px rgba(0,0,0,0.5), 0 6px 18px rgba(0,0,0,0.5)",
@@ -237,6 +297,7 @@ export default function Table(props) {
       })}
       <div style={{ position: "absolute", left: "50%", top: compact ? "44%" : "47%", transform: "translate(-50%, -50%)" }}>{center}</div>
       <div style={{ position: "absolute", left: "50%", bottom: 8, transform: "translateX(-50%)", width: "80%" }}>{mySeat}</div>
+      {arrowLayer}
     </div>
   );
 }

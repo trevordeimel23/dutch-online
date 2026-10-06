@@ -502,7 +502,7 @@ io.on("connection", (socket) => {
     try {
       const room = getRoomOrThrow(roomId);
       const g = room.game;
-      if (!g || g.phase !== "PLAY") return;
+      if (!g || (g.phase !== "PLAY" && g.phase !== "PEEK")) return;
       if (g.finalGraceEndsAt) return;
       if (g.dutchCallerId === socket.id) { emitError(socket.id, "You can't rearrange your cards after calling Dutch."); return; }
       const hand = g.hands.get(socket.id);
