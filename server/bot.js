@@ -12,13 +12,18 @@ const SPEED = Number(process.env.BOT_SPEED || 1);
 
 const BOT_NAMES = ["🤖 Ada", "🤖 Bruno", "🤖 Chen", "🤖 Dara", "🤖 Eli", "🤖 Faye", "🤖 Gus", "🤖 Hana", "🤖 Ivo"];
 
-const MISSED_MATCH_CHANCE = 0.1;  // chance a match attempt is aimed at the wrong card
-const FORGET_MATCH_CHANCE = 0.1;  // chance the bot just doesn't notice a match
+// Gameplay speed: how much slower than the original ("fast") pacing the bots think and move
+const SPEED_MULTIPLIER = { fast: 1, normal: 2, slow: 4 };
+// Difficulty: forget = chance the bot doesn't notice a match, wrong = chance an attempt is aimed at the wrong card
+const DIFFICULTY = {
+  easy:   { forget: 0.5,  wrong: 0.25 },
+  medium: { forget: 0.25, wrong: 0.15 },
+  hard:   { forget: 0.1,  wrong: 0.1 },
+};
 const DISCARD_PICKUP_MEMORY = 0.7; // chance of remembering the right slot for a picked-up discard
 const AVG_UNKNOWN_VALUE = 6.5;     // expected value of a card you haven't seen
 
 const rnd = (a, b) => a + Math.random() * (b - a);
-const wait = (min, max) => rnd(min, max) * SPEED;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 function rankOf(card) { return card.slice(0, -1); }
@@ -34,7 +39,8 @@ function cardValue(card) {
 const isBlackKing = (card) => rankOf(card) === "K" && (suitOf(card) === "S" || suitOf(card) === "C");
 
 class Bot {
-  constructor({ url, roomId, name, secret }) {
+  constructor({ url, roomId, name, secret, settings }) {
+    this.settings = settings || { speed: "fast", difficulty: "hard" };
     this.roomId = roomId;
     this.name = name;
     this.room = null;     // public room view
@@ -69,6 +75,9 @@ class Bot {
   }
 
   get id() { return this.socket.id; }
+
+  wait(min, max) { return rnd(min, max) * SPEED * (SPEED_MULTIPLIER[this.settings.speed] ?? 1); }
+  get difficulty() { return DIFFICULTY[this.settings.difficulty] ?? DIFFICULTY.hard; }
 
   // ── incoming state ────────────────────────────────────────────────────────
 
@@ -216,14 +225,14 @@ class Bot {
 
     if (phase === "PEEK") {
       if (!me.hasPeeked && room.lookCount > 0) {
-        return { key: "peek", delay: wait(1500, 3500), run: () => this.doPeek() };
+        return { key: "peek", delay: this.wait(1500, 3500), run: () => this.doPeek() };
       }
       return null;
     }
 
     if (phase === "SCORING") {
       if (!room.gameOver && room.nextDealerId === this.id) {
-        return { key: "newRound", delay: wait(5000, 7000), run: () => this.emit("game:newRound", { lookCount: 2 }) };
+        return { key: "newRound", delay: this.wait(5000, 7000), run: () => this.emit("game:newRound", { lookCount: 2 }) };
       }
       return null;
     }
@@ -232,13 +241,13 @@ class Bot {
 
     // The round is waiting for me to finish looking at my Queen peek on the last turn
     if (room.revealHold === this.id) {
-      return { key: "reveal", delay: wait(1500, 3000), run: () => this.emit("reveal:done", {}) };
+      return { key: "reveal", delay: this.wait(1500, 3000), run: () => this.emit("reveal:done", {}) };
     }
 
     // 1) A special-card power to use (from my own discard or from a match)
     const effect = this.pendingEffectType();
     if (effect) {
-      return { key: `effect:${effect}:${this.discardVersion}`, delay: wait(1200, 2400), run: () => this.doEffect(effect) };
+      return { key: `effect:${effect}:${this.discardVersion}`, delay: this.wait(1200, 2400), run: () => this.doEffect(effect) };
     }
 
     // 2) Matching the discard pile
@@ -250,12 +259,12 @@ class Bot {
     // 3) My turn
     if (room.turnPlayerId !== this.id) return null;
     if (me.pendingDraw) {
-      return { key: `place:${me.pendingDraw.card}`, delay: wait(900, 1700), run: () => this.doPlace() };
+      return { key: `place:${me.pendingDraw.card}`, delay: this.wait(900, 1700), run: () => this.doPlace() };
     }
     if (room.dutchWindowPlayerId === this.id) {
-      return { key: "window", delay: wait(500, 1000), run: () => this.doWindow() };
+      return { key: "window", delay: this.wait(500, 1000), run: () => this.doWindow() };
     }
-    return { key: `draw:${this.discardVersion}`, delay: wait(800, 1500), run: () => this.doDraw() };
+    return { key: `draw:${this.discardVersion}`, delay: this.wait(800, 1500), run: () => this.doDraw() };
   }
 
   pendingEffectType() {
@@ -285,14 +294,14 @@ class Bot {
     const v = this.discardVersion;
     if (!this.matchPlans[v]) {
       const roll = Math.random();
-      this.matchPlans[v] = roll < FORGET_MATCH_CHANCE ? "forget" : Math.random() < MISSED_MATCH_CHANCE ? "mistake" : "match";
+      this.matchPlans[v] = roll < this.difficulty.forget ? "forget" : Math.random() < this.difficulty.wrong ? "mistake" : "match";
     }
     const plan = this.matchPlans[v];
     if (plan === "forget") return null;
 
     return {
       key: `match:${v}:${slots[0]}:${plan}`,
-      delay: wait(900, 2600),
+      delay: this.wait(900, 2600),
       run: () => {
         if (plan === "mistake") {
           // Aims at the wrong card (a card that isn't a known match)
@@ -462,4 +471,4 @@ class Bot {
   }
 }
 
-module.exports = { Bot, BOT_NAMES };
+module.exports = { Bot, BOT_NAMES, SPEED_MULTIPLIER, DIFFICULTY };

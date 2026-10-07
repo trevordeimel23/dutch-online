@@ -101,6 +101,8 @@ export default function App() {
 
   const [roomId, setRoomId]   = useState("TEST");
   const [botCount, setBotCount] = useState(3);
+  const [botSpeed, setBotSpeed] = useState("normal");
+  const [botDifficulty, setBotDifficulty] = useState("medium");
   const [name, setName]       = useState("Trevor");
   const [log, setLog]         = useState([]);
   const [room, setRoom]       = useState(null);
@@ -382,7 +384,8 @@ export default function App() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log.length]);
 
-  const playBots = () => socket.emit("room:playBots", { name, botCount });
+  const playBots = () => socket.emit("room:playBots", { name, botCount, speed: botSpeed, difficulty: botDifficulty });
+  const changeBotSettings = (patch) => socket.emit("room:botSettings", { roomId, ...patch });
   const join     = () => socket.emit("room:join",   { roomId, name });
   const start    = () => socket.emit("game:start",  { roomId, lookCount });
   const newRound = () => socket.emit("game:newRound", { roomId, lookCount });
@@ -552,6 +555,22 @@ export default function App() {
                     {[2, 3, 4, 5, 6, 7, 8, 9].map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </label>
+                <label style={{ fontSize: 14, color: "#c8a96e", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  Difficulty
+                  <select value={botDifficulty} onChange={(e) => setBotDifficulty(e.target.value)} style={selectStyle}>
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </label>
+                <label style={{ fontSize: 14, color: "#c8a96e", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  Game speed
+                  <select value={botSpeed} onChange={(e) => setBotSpeed(e.target.value)} style={selectStyle}>
+                    <option value="fast">Fast</option>
+                    <option value="normal">Normal</option>
+                    <option value="slow">Slow</option>
+                  </select>
+                </label>
                 <Btn variant="success" onClick={playBots} disabled={!name.trim()}>🤖 Play vs Computer</Btn>
               </div>
             </Panel>
@@ -682,6 +701,28 @@ export default function App() {
                   <Btn variant="success" onClick={start} disabled={players.length < (room?.expectedPlayers ?? 1)} style={{ width: "100%" }}>
                     {players.length < (room?.expectedPlayers ?? 1) ? "Waiting for computer players…" : "Start Game"}
                   </Btn>
+                </Panel>
+              )}
+
+              {/* Computer-player settings (host can change them any time) */}
+              {room?.botSettings && (
+                <Panel title="Computer Players">
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#c8a96e", marginBottom: 8 }}>
+                    Speed
+                    <select value={room.botSettings.speed} disabled={!isHost} onChange={(e) => changeBotSettings({ speed: e.target.value })} style={selectStyle}>
+                      <option value="fast">Fast</option>
+                      <option value="normal">Normal</option>
+                      <option value="slow">Slow</option>
+                    </select>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 13, color: "#c8a96e" }}>
+                    Difficulty
+                    <select value={room.botSettings.difficulty} disabled={!isHost} onChange={(e) => changeBotSettings({ difficulty: e.target.value })} style={selectStyle}>
+                      <option value="easy">Easy</option>
+                      <option value="medium">Medium</option>
+                      <option value="hard">Hard</option>
+                    </select>
+                  </label>
                 </Panel>
               )}
 

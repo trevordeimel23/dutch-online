@@ -9,7 +9,7 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: true, credentials: true } });
 
 const crypto = require("crypto");
-const { Bot, BOT_NAMES } = require("./bot");
+const { Bot, BOT_NAMES, SPEED_MULTIPLIER, DIFFICULTY } = require("./bot");
 
 const PORT = process.env.PORT || 3001;
 const BOT_SECRET = crypto.randomBytes(12).toString("hex"); // lets the server's own bots identify themselves
@@ -268,6 +268,7 @@ function publicRoomView(room) {
     pendingEffect: g?.pendingEffect ?? null,
     revealHold: g?.revealHold ?? null,
     finalGraceEndsAt: g?.finalGraceEndsAt ?? null,
+    botSettings: room.botSettings ?? null,
     expectedPlayers: room.expectedPlayers ?? null, // set in play-vs-computer rooms until all bots have joined
     handSizes: Object.fromEntries(room.players.map((p) => [p.id, g?.hands?.get(p.id)?.length ?? 0])),
     reorders: g?.reorders ?? {},
@@ -411,13 +412,27 @@ io.on("connection", (socket) => {
   });
 
   // Start a private room against 2–9 computer players
-  socket.on("room:playBots", ({ name, botCount }) => {
+  // Host can change the computer players' speed / difficulty at any time (the bots read the same object)
+  socket.on("room:botSettings", ({ roomId, speed, difficulty }) => {
+    const room = rooms.get(roomId);
+    if (!room?.botSettings || room.hostId !== socket.id) return;
+    if (Object.hasOwn(SPEED_MULTIPLIER, speed)) room.botSettings.speed = speed;
+    if (Object.hasOwn(DIFFICULTY, difficulty)) room.botSettings.difficulty = difficulty;
+    broadcastRoom(roomId);
+  });
+
+  socket.on("room:playBots", ({ name, botCount, speed, difficulty }) => {
     if (!name) return;
     const n = Math.min(9, Math.max(2, Math.floor(Number(botCount)) || 3));
     let roomId;
     do { roomId = "BOT-" + crypto.randomBytes(2).toString("hex").toUpperCase(); } while (rooms.has(roomId));
     joinRoom(roomId, name, false);
-    rooms.get(roomId).expectedPlayers = n + 1;
+    const room = rooms.get(roomId);
+    room.expectedPlayers = n + 1;
+    room.botSettings = {
+      speed: Object.hasOwn(SPEED_MULTIPLIER, speed) ? speed : "normal",
+      difficulty: Object.hasOwn(DIFFICULTY, difficulty) ? difficulty : "medium",
+    };
     socket.emit("room:created", { roomId });
 
     const bots = [];
@@ -425,7 +440,7 @@ io.on("connection", (socket) => {
     BOT_NAMES.slice(0, n).forEach((botName, i) => {
       setTimeout(() => {
         if (!rooms.has(roomId)) return; // human already left
-        const bot = new Bot({ url: `http://127.0.0.1:${PORT}`, roomId, name: botName, secret: BOT_SECRET });
+        const bot = new Bot({ url: `http://127.0.0.1:${PORT}`, roomId, name: botName, secret: BOT_SECRET, settings: room.botSettings });
         bots.push(bot);
       }, 150 * (i + 1));
     });
