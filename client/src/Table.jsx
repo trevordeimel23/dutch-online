@@ -95,7 +95,7 @@ function OpponentSeat({ mobile, player, room, level, highlights, marks, targetMo
   );
 }
 
-export default function Table({ room, meId, highlights, marks, targetMode, aceTarget, hintSeatId, onCardClick, onSeatClick, children }) {
+export default function Table({ room, meId, highlights, marks, targetMode, aceTarget, hintSeatId, onCardClick, onSeatClick, discardTarget, onDiscardClick, children }) {
   const mobile = useIsMobile();
   const players = room.players ?? [];
   const meIdx = players.findIndex((p) => p.id === meId);
@@ -141,7 +141,7 @@ export default function Table({ room, meId, highlights, marks, targetMode, aceTa
           <CardBack size="pile" />
           <div className="pile__label">Deck <b>{room.deckCount}</b></div>
         </div>
-        <div className="pile" data-slot="discard">
+        <div className={`pile${discardTarget ? " pile--target" : ""}`} data-slot="discard" onClick={discardTarget ? onDiscardClick : undefined}>
           {room.discardTop
             ? <CardFace key={room.discardTop} card={room.discardTop} size="pile" className="card--pop" />
             : <div className="pile__empty" />}
@@ -157,6 +157,7 @@ export default function Table({ room, meId, highlights, marks, targetMode, aceTa
 export function Hand({
   room, meId, me, getVisibleCard, highlights, marks, selectedIndex,
   canReorder, onReorder, onMyCardClick, targetMode, onCardClick,
+  drawnActive, armed, onDrawnTap, onSwapTo, onDiscardDrawn, onDragDrawn,
 }) {
   const handSize = me?.handSize ?? 0;
   const myDrawn = me?.pendingDraw;
@@ -164,6 +165,7 @@ export function Hand({
   // for the server to confirm the new order.
   const [drag, setDrag] = useState(null);
   const [settle, setSettle] = useState(null);
+  const [dragDrawn, setDragDrawn] = useState(null); // the drawn card is being carried: { dx, dy, target }
   const dragRef = useRef(null);
 
   // The settle offsets only apply to the hand they were made for. The moment the server sends the new order (a new `me`),
@@ -187,13 +189,30 @@ export function Hand({
   // through a ref so the touch listeners, which are attached once, never act on stale data.
   const cardsRef = useRef(null);
   const latest = useRef({});
-  latest.current = { canReorder, handSize, onReorder, onMyCardClick, targetMode, onCardClick, meId, me };
+  latest.current = { canReorder, handSize, onReorder, onMyCardClick, targetMode, onCardClick, meId, me, drawnActive, onDrawnTap, onSwapTo, onDiscardDrawn, onDragDrawn };
 
-  const beginDrag = (from, x, y) => {
-    dragRef.current = { from, sx: x, sy: y, active: false, step: measureStep(), n: latest.current.handSize };
+  // What is under the finger / cursor: one of my cards (swap into it) or the discard pile (throw the card away)
+  const dropTargetAt = (x, y) => {
+    for (const el of document.elementsFromPoint(x, y)) {
+      const slot = el.closest?.("[data-myslot]")?.getAttribute("data-myslot");
+      if (slot !== null && slot !== undefined) return { slot: Number(slot) };
+      if (el.closest?.('[data-slot="discard"]')) return { discard: true };
+    }
+    return null;
+  };
+
+  const beginDrag = (from, x, y, kind = "slot") => {
+    dragRef.current = { kind, from, sx: x, sy: y, active: false, step: kind === "slot" ? measureStep() : 0, n: latest.current.handSize };
   };
   const moveDrag = (x, y) => {
     const d = dragRef.current;
+    if (d && d.kind === "drawn") {
+      if (!latest.current.drawnActive) return false;
+      const dx = x - d.sx, dy = y - d.sy;
+      if (!d.active && Math.hypot(dx, dy) > 8) { d.active = true; latest.current.onDragDrawn?.(true); }
+      if (d.active) setDragDrawn({ dx, dy, target: dropTargetAt(x, y) });
+      return d.active;
+    }
     if (!d || !latest.current.canReorder) return false;
     const dx = x - d.sx, dy = y - d.sy;
     if (!d.active && Math.hypot(dx, dy) > 8) d.active = true;
@@ -204,11 +223,20 @@ export function Hand({
     }
     return d.active;
   };
-  const endDrag = (x) => {
+  const endDrag = (x, y) => {
     const d = dragRef.current;
     dragRef.current = null;
-    if (!d) { setDrag(null); return; }
+    if (!d) { setDrag(null); setDragDrawn(null); return; }
     const L = latest.current;
+    if (d.kind === "drawn") {
+      setDragDrawn(null);
+      L.onDragDrawn?.(false);
+      if (!d.active) { L.onDrawnTap?.(); return; } // a tap picks the card up; the next tap chooses where it goes
+      const target = dropTargetAt(x, y);
+      if (target?.slot !== undefined) L.onSwapTo(target.slot);
+      else if (target?.discard) L.onDiscardDrawn();
+      return;
+    }
     if (d.active) {
       const insertAt = Math.max(0, Math.min(d.n - 1, Math.round(d.from + (x - d.sx) / d.step)));
       setDrag(null);
@@ -222,7 +250,7 @@ export function Hand({
       else L.onMyCardClick(d.from);
     }
   };
-  const cancel = () => { dragRef.current = null; setDrag(null); };
+  const cancel = () => { dragRef.current = null; setDrag(null); setDragDrawn(null); latest.current.onDragDrawn?.(false); };
 
   // Mouse / pen
   const down = (e, i) => {
@@ -231,7 +259,12 @@ export function Hand({
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer may already be gone */ }
   };
   const move = (e) => { if (e.pointerType !== "touch") moveDrag(e.clientX, e.clientY); };
-  const up = (e) => { if (e.pointerType !== "touch") endDrag(e.clientX); };
+  const up = (e) => { if (e.pointerType !== "touch") endDrag(e.clientX, e.clientY); };
+  const downDrawn = (e) => {
+    if (e.pointerType === "touch" || !latest.current.drawnActive) return;
+    beginDrag(null, e.clientX, e.clientY, "drawn");
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer may already be gone */ }
+  };
 
   // Touch: listeners must be non-passive so the page can't scroll or cancel the gesture while a card is being carried
   useEffect(() => {
@@ -241,9 +274,15 @@ export function Hand({
     const find = (e) => [...e.changedTouches].find((t) => t.identifier === touchId);
     const onStart = (e) => {
       if (touchId !== null) return;
+      const t = e.changedTouches[0];
+      if (e.target.closest?.("[data-drawn]")) {
+        if (!latest.current.drawnActive) return;
+        touchId = t.identifier;
+        beginDrag(null, t.clientX, t.clientY, "drawn");
+        return;
+      }
       const slot = e.target.closest?.("[data-myslot]");
       if (!slot) return;
-      const t = e.changedTouches[0];
       touchId = t.identifier;
       beginDrag(Number(slot.getAttribute("data-myslot")), t.clientX, t.clientY);
     };
@@ -251,13 +290,13 @@ export function Hand({
       const t = find(e);
       if (!t || !dragRef.current) return;
       moveDrag(t.clientX, t.clientY);
-      if (latest.current.canReorder) e.preventDefault();
+      if (latest.current.canReorder || latest.current.drawnActive) e.preventDefault();
     };
     const onEnd = (e) => {
       const t = find(e);
       if (!t) return;
       touchId = null;
-      endDrag(t.clientX);
+      endDrag(t.clientX, t.clientY);
       if (e.cancelable) e.preventDefault(); // we handled the tap ourselves; no ghost click afterwards
     };
     const onCancel = () => { touchId = null; cancel(); };
@@ -295,14 +334,16 @@ export function Hand({
         <span className="hand__name">{meP ? meP.name : "You"}</span>
         {total !== undefined && <span className="seat__score">{total}</span>}
         {reorders > 0 && <span className="seat__shuffle">🔀{reorders}</span>}
-        {canReorder && handSize > 1 && <span className="hand__hint">{drag ? `slot ${drag.insertAt}` : "slide a card to move it"}</span>}
+        {drawnActive
+          ? <span className="hand__hint hand__hint--go">{armed ? "Tap a card to swap, or the pile to discard" : "Drag the new card onto a card or the pile"}</span>
+          : canReorder && handSize > 1 && <span className="hand__hint">{drag ? `slot ${drag.insertAt}` : "slide a card to move it"}</span>}
       </div>
-      <div className="hand__cards" ref={cardsRef} style={{ touchAction: canReorder ? "none" : "manipulation" }}>
+      <div className="hand__cards" ref={cardsRef} style={{ touchAction: canReorder || drawnActive ? "none" : "manipulation" }}>
         {Array.from({ length: handSize }).map((_, i) => {
           const card = getVisibleCard(i);
           const isDragging = drag?.from === i;
           const isSettling = !drag && settleLive?.from === i;
-          const hl = highlights[`${meId}:${i}`] ?? marks[`${meId}:${i}`];
+          const hl = (dragDrawn?.target?.slot === i ? "pick" : undefined) ?? highlights[`${meId}:${i}`] ?? marks[`${meId}:${i}`];
           let transform;
           let transition;
           if (isDragging) { transform = `translate(${drag.dx}px, ${drag.dy}px) scale(1.06)`; transition = "none"; }
@@ -311,7 +352,7 @@ export function Hand({
           if (settleStale) { transform = "none"; transition = "none"; }
           const common = {
             size: "handFit",
-            selected: selectedIndex === i && !layout,
+            selected: (selectedIndex === i && !layout) || dragDrawn?.target?.slot === i,
             highlight: hl,
             label: i,
             "data-myslot": i,
@@ -331,8 +372,20 @@ export function Hand({
           return card ? <CardFace key={i} card={card} {...common} /> : <CardBack key={i} {...common} />;
         })}
         {myDrawn && (
-          <div className="hand__drawn">
-            <CardFace card={myDrawn.card} size="handFit" highlight="swap" label="drawn" />
+          <div className="hand__drawn" data-drawn>
+            <CardFace
+              card={myDrawn.card} size="handFit" highlight="swap" label="drawn"
+              selected={!!armed || !!dragDrawn}
+              onPointerDown={downDrawn} onPointerMove={move} onPointerUp={up}
+              onPointerCancel={(e) => { if (e.pointerType !== "touch") cancel(); }}
+              style={{
+                touchAction: drawnActive ? "none" : "manipulation",
+                cursor: drawnActive ? "grab" : "default",
+                zIndex: dragDrawn ? 30 : undefined,
+                transform: dragDrawn ? `translate(${dragDrawn.dx}px, ${dragDrawn.dy}px) scale(1.08)` : undefined,
+                transition: dragDrawn ? "none" : undefined,
+              }}
+            />
           </div>
         )}
       </div>

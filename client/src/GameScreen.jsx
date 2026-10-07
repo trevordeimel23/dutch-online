@@ -94,6 +94,7 @@ export default function GameScreen({ c }) {
   const [logOpen, setLogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [coachOpen, setCoachOpen] = useState(false);
+  const [draggingDrawn, setDraggingDrawn] = useState(false);
   const [sheetPid, setSheetPid] = useState(null); // opponent whose cards are shown big (Jack / Queen targeting)
   const mobile = useIsMobile();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -138,6 +139,9 @@ export default function GameScreen({ c }) {
     .filter((p) => p.id !== room.dutchCallerId)
     .reduce((sum, p) => sum + (room.handSizes?.[p.id] ?? 0), 0);
   const noTargets = (c.myEffect?.type === "JACK" || c.myEffect?.type === "QUEEN") && cardsOnTable === 0;
+
+  // You're holding a card you just drew: it can be dragged (or tapped, then tapped again) onto a card or the discard pile
+  const drawnActive = c.isMyTurn && !!c.pending && !room.pendingEffect && phase === "PLAY";
 
   let dockRow;
   if (phase === "PEEK") {
@@ -244,6 +248,7 @@ export default function GameScreen({ c }) {
           highlights={c.highlights} marks={c.marks}
           targetMode={c.targetMode} aceTarget={c.aceTarget} hintSeatId={c.hintSeatId}
           onCardClick={c.onCardClick} onSeatClick={onSeatClick}
+          discardTarget={drawnActive && (c.armed || draggingDrawn)} onDiscardClick={c.onDiscardDrawn}
         >
           {c.toast && <div key={c.toast.id} className={`toast toast--${c.toast.tone}`}>{c.toast.text}</div>}
         </Table>
@@ -256,6 +261,8 @@ export default function GameScreen({ c }) {
           selectedIndex={phase === "PLAY" ? c.selIdx : -1}
           canReorder={c.canReorder} onReorder={c.onReorder}
           onMyCardClick={c.onMyCardClick} targetMode={c.targetMode} onCardClick={c.onCardClick}
+          drawnActive={drawnActive} armed={c.armed} onDrawnTap={c.onDrawnTap} onSwapTo={c.onSwapTo}
+          onDiscardDrawn={c.onDiscardDrawn} onDragDrawn={setDraggingDrawn}
         />
       </section>
 

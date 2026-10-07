@@ -58,7 +58,8 @@ export default function App() {
   const [jackB, setJackB]           = useState({ playerId: "", index: 0 });
   const [queenTarget, setQueenTarget] = useState({ playerId: "", index: 0 });
   const [aceTarget, setAceTarget]   = useState("");
-  const [jackStep, setJackStep]     = useState(0); // which Jack target the next tap fills in
+  const [jackStep, setJackStep]     = useState(0);
+  const [armedCard, setArmedCard]   = useState(null); // the drawn card you tapped to pick up (so the next tap chooses where it goes) // which Jack target the next tap fills in
 
   // Cards you've peeked at stay visible for 15s. Tracked by card (a deck has no duplicates), not slot,
   // so rearranging, removing or matching cards can't reset or re-trigger a reveal.
@@ -366,6 +367,17 @@ export default function App() {
   const totals        = room?.totals ?? {};
 
   const selIdx = Math.min(matchIndex, Math.max(handSize - 1, 0));
+  const armed = !!pending && isMyTurn && armedCard === pending.card;
+  const swapInto = (index) => { setArmedCard(null); emit("turn:swap", { index }); };
+  const discardDrawn = () => {
+    // A card taken from the discard pile has to go into your hand (unless you have no cards left)
+    if (pending && pending.source !== "DECK" && handSize > 0) {
+      showToast("A card from the discard pile must go into your hand", "danger");
+      return;
+    }
+    setArmedCard(null);
+    emit("turn:discard-drawn");
+  };
   const getVisibleCard = (i) => {
     if (me?.fullHand) return me.fullHand[i] ?? null;
     const card = me?.known?.[i];
@@ -445,7 +457,12 @@ export default function App() {
       onRules: () => setShowRules(true),
       onCardClick: onTableCardClick,
       onSeatClick: (pid) => setAceTarget(pid),
+      armed,
+      onDrawnTap: () => setArmedCard((cur) => (cur === pending?.card ? null : pending?.card ?? null)),
+      onSwapTo: swapInto,
+      onDiscardDrawn: discardDrawn,
       onMyCardClick: (i) => {
+        if (armed) { swapInto(i); return; }
         if (phase === "PLAY") setMatchIndex(i);
         else if (phase === "PEEK" && !me?.hasPeeked) togglePeekIndex(i);
       },
