@@ -1,81 +1,165 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { CardBack, CardFace, useIsMobile } from "./cards.jsx";
+import { Avatar } from "./ui.jsx";
 
-// Top-down view of the table: you are always at the bottom, the other players sit around the top.
-// Everyone's cards stay in their slots; when someone places, swaps, matches or rearranges a card,
-// the affected slot is highlighted for a few seconds.
+// Top-down view of the table. Opponents sit around the rim as avatars with their score; the deck and
+// discard pile are in the middle. Your own hand is a separate row below the table (see <Hand />).
+// When someone places, swaps, matches or rearranges a card, the affected slot (or avatar) is highlighted.
 
-function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, isHint, onClick, small }) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, flexWrap: "wrap",
-        marginBottom: small ? 4 : 8, padding: small ? "2px 6px" : "3px 10px", borderRadius: 14, fontSize: small ? 11 : 13,
-        background: isTurn ? "rgba(255,215,0,0.25)" : "rgba(0,0,0,0.35)",
-        border: isHint ? "2px solid #69f0ae" : isTarget ? "2px solid #ffffff" : isTurn ? "1px solid rgba(255,215,0,0.7)" : "1px solid rgba(255,255,255,0.12)",
-        cursor: onClick ? "pointer" : "default",
-        color: isMe ? "#ffd700" : "#e8d5a3",
-      }}
-    >
-      {isTurn && <span style={{ color: "#ffd700" }}>▶</span>}
-      <b>{player.name}</b>
-      {isMe && <span style={{ fontSize: 11, color: "#a89060" }}>(you)</span>}
-      {isDutch && <span>🔔</span>}
-      {total !== undefined && <span style={{ fontSize: 11, color: "#a89060" }}>{total} pts</span>}
-      <span
-        title={reorders ? `Rearranged their cards ${reorders} time(s) this round` : "Hasn't rearranged their cards"}
-        style={{ fontSize: 11, color: reorders ? "#4dd0e1" : "#6d7d6d" }}
-      >
-        🔀 {reorders ? `×${reorders}` : "no"}
-      </span>
-    </div>
-  );
+// Seat positions (percent of the felt) for n opponents, clockwise from your left, over the top.
+// Seats are spaced evenly along the oval's actual (pixel) outline, so a wide table and a tall one both look balanced.
+function seatPositions(n, w, h, mobile) {
+  const rx = (mobile ? 0.37 : 0.41) * w;
+  const ry = (mobile ? 0.38 : 0.40) * h;
+  const a0 = (165 * Math.PI) / 180, a1 = (375 * Math.PI) / 180;
+  const steps = 360;
+  const pts = [];
+  let len = 0;
+  for (let s = 0; s <= steps; s++) {
+    const a = a0 + ((a1 - a0) * s) / steps;
+    const p = { x: rx * Math.cos(a), y: ry * Math.sin(a) };
+    if (s > 0) len += Math.hypot(p.x - pts[s - 1].x, p.y - pts[s - 1].y);
+    pts.push({ ...p, len });
+  }
+  return Array.from({ length: n }, (_, k) => {
+    const target = (len * (k + 0.5)) / n;
+    let idx = pts.findIndex((p) => p.len >= target);
+    if (idx <= 0) idx = 1;
+    const p0 = pts[idx - 1], p1 = pts[idx];
+    const f = p1.len === p0.len ? 0 : (target - p0.len) / (p1.len - p0.len);
+    const x = p0.x + (p1.x - p0.x) * f, y = p0.y + (p1.y - p0.y) * f;
+    return { x: 50 + (x / w) * 100, y: 50 + (y / h) * 100 };
+  });
 }
 
-function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCardClick, onSeatClick, isAceTarget, isHint }) {
+// How much detail an opponent seat shows: 0 = full card row, 1 = small card row, 2 = just a card count
+function detailLevel(n, mobile) {
+  if (mobile) return n <= 3 ? 0 : n <= 5 ? 1 : 2;
+  return n <= 5 ? 0 : n <= 7 ? 1 : 2;
+}
+
+function shortName(name) {
+  return name.replace(/^🤖\s*/, "");
+}
+
+function OpponentSeat({ mobile, player, room, level, highlights, marks, targetMode, onCardClick, onSeatClick, isAceTarget, isHint, pos }) {
   const count = room.handSizes?.[player.id] ?? 0;
   const held = room.drawn?.playerId === player.id ? room.drawn : null;
-  const clickable = targetMode === "JACK" || targetMode === "QUEEN";
+  const isTurn = player.id === room.turnPlayerId;
+  const isDutch = player.id === room.dutchCallerId;
+  const reorders = room.reorders?.[player.id] ?? 0;
+  const total = room.totals?.[player.id];
+  const cardTargets = targetMode === "JACK" || targetMode === "QUEEN";
+  const seatHl = Object.keys(highlights).find((k) => k.startsWith(`${player.id}:`));
+  const hl = seatHl ? highlights[seatHl] : null;
+  const cardSize = level === 0 ? "opp" : "oppS";
+
+  const ringClass = [
+    isTurn ? "avatar--turn" : "", isDutch ? "avatar--dutch" : "",
+    isAceTarget ? "avatar--target" : "", isHint ? "avatar--hint" : "",
+    cardTargets || targetMode === "ACE" ? "avatar--tappable" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div style={{ textAlign: "center", maxWidth: size === "xxs" ? 125 : 260 }}>
-      <SeatHeader
-        small={size === "xxs"}
-        player={player}
-        isTurn={player.id === room.turnPlayerId}
-        total={room.totals?.[player.id]}
-        reorders={room.reorders?.[player.id]}
-        isDutch={player.id === room.dutchCallerId}
-        isTarget={isAceTarget}
-        isHint={isHint}
-        onClick={targetMode === "ACE" ? () => onSeatClick(player.id) : undefined}
-      />
-      <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", paddingTop: 18 }}>
-        {Array.from({ length: count }).map((_, i) => (
-          <CardBack
-            key={i}
-            size={size}
-            highlight={highlights[`${player.id}:${i}`] ?? marks[`${player.id}:${i}`]}
-            data-slot={`${player.id}:${i}`}
-            onClick={clickable ? () => onCardClick(player.id, i) : undefined}
-          />
-        ))}
-        {held && (
-          <div style={{ marginLeft: 8, textAlign: "center" }}>
-            {held.card ? <CardFace card={held.card} size={size} highlight="swap" /> : <CardBack size={size} highlight="swap" />}
-            <div style={{ fontSize: 10, color: "#ffd700", marginTop: 4 }}>holding</div>
-          </div>
-        )}
+    <div className={`seat${level === 2 ? " seat--tight" : ""}${level === 2 && mobile ? " seat--noname" : ""}`} data-seat={player.id} style={{ left: `${pos.x}%`, top: `${pos.y}%` }}>
+      <div className="seat__head" onClick={cardTargets || targetMode === "ACE" ? () => onSeatClick(player.id) : undefined}>
+        <Avatar player={player} className={ringClass} data-hl={hl || undefined}>
+          {held && (
+            <span className="seat__held" title="holding a card">
+              {held.card ? <CardFace card={held.card} size="oppS" /> : <CardBack size="oppS" />}
+            </span>
+          )}
+        </Avatar>
+        <div className={`seat__pill${isTurn ? " seat__pill--turn" : ""}`}>
+          <span className="seat__name">{shortName(player.name)}</span>
+          {total !== undefined && <span className="seat__score">{total}</span>}
+          {isDutch && <span aria-label="called Dutch">🔔</span>}
+          {reorders > 0 && <span className="seat__shuffle" title={`Rearranged their cards ${reorders} time(s) this round`}>🔀{reorders}</span>}
+          {level === 2 && <span className="seat__count-in" title="cards in hand">🂠{count}</span>}
+        </div>
       </div>
+      {level < 2 ? (
+        <div className="seat__cards">
+          {Array.from({ length: count }).map((_, i) => (
+            <CardBack
+              key={i}
+              size={cardSize}
+              highlight={highlights[`${player.id}:${i}`] ?? marks[`${player.id}:${i}`]}
+              data-slot={`${player.id}:${i}`}
+              onClick={cardTargets ? () => onCardClick(player.id, i) : undefined}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function MySeat({
-  compact, player, meId, room, me, getVisibleCard, highlights, marks, selectedIndex,
+export default function Table({ room, meId, highlights, marks, targetMode, aceTarget, hintSeatId, onCardClick, onSeatClick, children }) {
+  const mobile = useIsMobile();
+  const players = room.players ?? [];
+  const meIdx = players.findIndex((p) => p.id === meId);
+  // Everyone else, clockwise starting from your left
+  const others = meIdx === -1 ? players : [...players.slice(meIdx + 1), ...players.slice(0, meIdx)];
+  const n = others.length;
+  const level = detailLevel(n, mobile);
+  const ref = useRef(null);
+  const [size, setSize] = useState({ w: 360, h: 400 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const update = () => setSize({ w: el.clientWidth || 360, h: el.clientHeight || 400 });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const positions = seatPositions(n, size.w, size.h, mobile);
+
+  return (
+    <div className="table" ref={ref}>
+      <div className="table__felt" />
+      {others.map((p, k) => (
+        <OpponentSeat
+          key={p.id}
+          mobile={mobile}
+          player={p}
+          room={room}
+          level={level}
+          highlights={highlights}
+          marks={marks}
+          targetMode={targetMode}
+          onCardClick={onCardClick}
+          onSeatClick={onSeatClick}
+          isAceTarget={targetMode === "ACE" && aceTarget === p.id}
+          isHint={!!hintSeatId && hintSeatId === p.id}
+          pos={positions[k]}
+        />
+      ))}
+      <div className="table__center">
+        <div className="pile" data-slot="deck">
+          <CardBack size="pile" />
+          <div className="pile__label">Deck <b>{room.deckCount}</b></div>
+        </div>
+        <div className="pile" data-slot="discard">
+          {room.discardTop
+            ? <CardFace key={room.discardTop} card={room.discardTop} size="pile" className="card--pop" />
+            : <div className="pile__empty" />}
+          <div className="pile__label">Discard</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Your hand (a row below the table). Drag a card onto another slot to rearrange. ──────────────
+export function Hand({
+  room, meId, me, getVisibleCard, highlights, marks, selectedIndex,
   canReorder, onReorder, onMyCardClick, targetMode, onCardClick,
 }) {
   const handSize = me?.handSize ?? 0;
+  const myDrawn = me?.pendingDraw;
   const [drag, setDrag] = useState(null);
   const dragRef = useRef(null);
 
@@ -114,25 +198,25 @@ function MySeat({
   };
   const cancel = () => { dragRef.current = null; setDrag(null); };
 
-  const myDrawn = me?.pendingDraw;
+  const meP = room.players.find((p) => p.id === meId);
+  const reorders = room.reorders?.[meId] ?? 0;
+  const total = room.totals?.[meId];
 
   return (
-    <div style={{ textAlign: "center" }}>
-      <SeatHeader
-        player={player}
-        isMe
-        isTurn={player.id === room.turnPlayerId}
-        total={room.totals?.[player.id]}
-        reorders={room.reorders?.[player.id]}
-        isDutch={player.id === room.dutchCallerId}
-      />
-      <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", paddingTop: 18, paddingBottom: 22 }}>
+    <div className="hand" style={{ "--n": Math.max(handSize + (myDrawn ? 1 : 0), 1) }}>
+      <div className="hand__meta">
+        <span className="hand__name">{meP ? meP.name : "You"}</span>
+        {total !== undefined && <span className="seat__score">{total}</span>}
+        {reorders > 0 && <span className="seat__shuffle">🔀{reorders}</span>}
+        {canReorder && handSize > 1 && <span className="hand__hint">drag to rearrange</span>}
+      </div>
+      <div className="hand__cards">
         {Array.from({ length: handSize }).map((_, i) => {
           const card = getVisibleCard(i);
           const isDragging = drag?.from === i;
           const hl = highlights[`${meId}:${i}`] ?? marks[`${meId}:${i}`] ?? (drag && drag.over === i ? "moved" : undefined);
           const common = {
-            size: "md",
+            size: "handFit",
             selected: selectedIndex === i,
             highlight: hl,
             label: i,
@@ -148,27 +232,23 @@ function MySeat({
               zIndex: isDragging ? 20 : undefined,
               transform: isDragging ? `translate(${drag.dx}px, ${drag.dy}px) scale(1.08)` : undefined,
               transition: isDragging ? "none" : undefined,
-              boxShadow: isDragging ? "0 10px 24px rgba(0,0,0,0.6)" : undefined,
+              boxShadow: isDragging ? "var(--shadow-3)" : undefined,
             },
           };
           return card ? <CardFace key={i} card={card} {...common} /> : <CardBack key={i} {...common} />;
         })}
         {myDrawn && (
-          <div style={{ marginLeft: 12, textAlign: "center" }}>
-            <CardFace card={myDrawn.card} size="md" highlight="swap" />
-            <div style={{ fontSize: 10, color: "#ffd700", marginTop: 4 }}>in hand</div>
+          <div className="hand__drawn">
+            <CardFace card={myDrawn.card} size="handFit" highlight="swap" label="drawn" />
           </div>
         )}
       </div>
-      {canReorder && handSize > 1 && !compact && (
-        <div style={{ fontSize: 11, color: "#7fa07f", marginTop: 2 }}>Drag your cards to rearrange them — everyone can see that you did</div>
-      )}
     </div>
   );
 }
 
-// Draws arrows between slots / piles so it's obvious which cards moved where
-function ArrowLayer({ rootRef, arrows, dep }) {
+// ── Arrows between slots / piles, so it's obvious which cards moved where ───────────────────────
+export function ArrowLayer({ rootRef, arrows, dep }) {
   const [geo, setGeo] = useState([]);
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -176,7 +256,9 @@ function ArrowLayer({ rootRef, arrows, dep }) {
     const measure = () => {
       const rr = root.getBoundingClientRect();
       const center = (key) => {
-        const el = root.querySelector(`[data-slot="${key}"]`);
+        // Slot not on screen (compact seat)? Fall back to that player's avatar.
+        const pid = key.includes(":") ? key.slice(0, key.lastIndexOf(":")) : null;
+        const el = root.querySelector(`[data-slot="${CSS.escape(key)}"]`) ?? (pid ? root.querySelector(`[data-seat="${CSS.escape(pid)}"] .avatar`) : null);
         if (!el) return null;
         const r = el.getBoundingClientRect();
         return { x: r.left - rr.left + r.width / 2, y: r.top - rr.top + r.height / 2 };
@@ -190,12 +272,13 @@ function ArrowLayer({ rootRef, arrows, dep }) {
 
   if (!geo.length) return null;
   const colors = [...new Set(geo.map((g) => g.color))];
+  const markerId = (col) => `ah-${col.replace(/[^a-z]/gi, "")}`;
   return (
-    <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 25, overflow: "visible" }}>
+    <svg className="arrows">
       <defs>
         {colors.map((col) => (
-          <marker key={col} id={`ah${col.replace("#", "")}`} markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="12" refY="8" orient="auto">
-            <path d="M0,0 L16,8 L0,16 z" fill={col} />
+          <marker key={col} id={markerId(col)} markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+            <path d="M0,0 L14,7 L0,14 z" style={{ fill: col }} />
           </marker>
         ))}
       </defs>
@@ -203,124 +286,18 @@ function ArrowLayer({ rootRef, arrows, dep }) {
         const mx = (a.p1.x + a.p2.x) / 2, my = (a.p1.y + a.p2.y) / 2;
         const dx = a.p2.x - a.p1.x, dy = a.p2.y - a.p1.y;
         const len = Math.hypot(dx, dy) || 1;
-        const bend = Math.min(60, len * 0.25);
+        const bend = Math.min(50, len * 0.22);
         const cx = mx - (dy / len) * bend, cy = my + (dx / len) * bend;
-        const id = `ah${a.color.replace("#", "")}`;
+        const d = `M${a.p1.x},${a.p1.y} Q${cx},${cy} ${a.p2.x},${a.p2.y}`;
+        const mid = markerId(a.color);
         return (
-          <g key={a.id} style={{ animation: "arrowFade 6s ease-out forwards" }}>
-            <path d={`M${a.p1.x},${a.p1.y} Q${cx},${cy} ${a.p2.x},${a.p2.y}`} fill="none" stroke="#000" strokeOpacity="0.45" strokeWidth="7" strokeLinecap="round" />
-            <path d={`M${a.p1.x},${a.p1.y} Q${cx},${cy} ${a.p2.x},${a.p2.y}`} fill="none" stroke={a.color} strokeWidth="4" strokeLinecap="round"
-              markerEnd={`url(#${id})`} markerStart={a.both ? `url(#${id})` : undefined} strokeDasharray="10 6" />
-            {a.label && (
-              <text x={cx} y={cy} textAnchor="middle" fontSize="12" fontWeight="bold" fill="#fff" stroke="#000" strokeWidth="3" paintOrder="stroke" fontFamily="sans-serif">{a.label}</text>
-            )}
+          <g key={a.id} className="arrows__g">
+            <path d={d} className="arrows__shadow" />
+            <path d={d} className="arrows__line" style={{ stroke: a.color }} markerEnd={`url(#${mid})`} markerStart={a.both ? `url(#${mid})` : undefined} />
+            {a.label && <text x={cx} y={cy} textAnchor="middle" className="arrows__label">{a.label}</text>}
           </g>
         );
       })}
     </svg>
-  );
-}
-
-// Seat positions (percent of the table) for the k-th opponent clockwise from your left.
-// Up to 5 opponents sit on an arc over the top; with more, some move to rows down each side.
-function seatPosition(k, n, tiny) {
-  if (n <= 5) {
-    const span = n <= 2 ? 0.8 * Math.PI : n <= 4 ? Math.PI : 1.2 * Math.PI;
-    const theta = 1.5 * Math.PI - span / 2 + (span * (k + 0.5)) / n;
-    return { x: 50 + 36 * Math.cos(theta), y: 30 + 22 * Math.sin(theta) + (tiny ? 5 : 10) };
-  }
-  const perSide = n === 6 ? 1 : 2;
-  const top = n - 2 * perSide;
-  const sideYs = perSide === 1 ? [40] : [52, 30];          // lower to upper
-  const topXs = (i) => (top === 1 ? 50 : 22 + (56 * i) / (top - 1));
-  const topY = tiny ? 11 : 12;
-  if (k < perSide) return { x: 8, y: sideYs[k] };            // left side, bottom to top
-  if (k < perSide + top) return { x: topXs(k - perSide), y: topY };
-  const r = k - perSide - top;                               // right side, top to bottom
-  return { x: 92, y: sideYs[perSide - 1 - r] };
-}
-
-export default function Table(props) {
-  const rootRef = useRef(null);
-  const { room, meId, me, highlights, marks, targetMode, aceTarget } = props;
-  const mobile = useIsMobile();
-  const players = room.players ?? [];
-  const meIdx = players.findIndex((p) => p.id === meId);
-  const meP = players[meIdx];
-  // Seat everyone else clockwise starting from your left
-  const others = meIdx === -1 ? players : [...players.slice(meIdx + 1), ...players.slice(0, meIdx)];
-  const n = others.length;
-  const tableHeight = props.height ?? 620;
-  const compact = tableHeight < 580;
-  const tiny = tableHeight < 440;
-  const pileSize = mobile ? "md" : tiny ? "sm" : compact ? "md" : "lg";
-  const pileDims = { sm: [48, 68], md: [58, 82], lg: [88, 124] }[pileSize];
-  const oppSize = mobile ? (n >= 5 ? "xxs" : "xs") : n >= 6 ? "xxs" : (n >= 4 || compact ? "xs" : "sm");
-
-  const center = (
-    <div style={{ display: "flex", gap: mobile ? 18 : 28, alignItems: "center", justifyContent: "center" }}>
-      <div data-slot="deck" style={{ textAlign: "center" }}>
-        <CardBack size={pileSize} />
-        <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Deck · {room.deckCount}</div>
-      </div>
-      <div data-slot="discard" style={{ textAlign: "center" }}>
-        {room.discardTop
-          ? <CardFace key={room.discardTop} card={room.discardTop} size={pileSize} style={{ animation: "cardPop 0.35s ease-out" }} />
-          : <div style={{ width: pileDims[0], height: pileDims[1], border: "2px dashed rgba(255,255,255,0.25)", borderRadius: 8 }} />}
-        <div style={{ fontSize: 11, color: "#a8c8a8", marginTop: 6 }}>Discard</div>
-      </div>
-    </div>
-  );
-
-  const seatProps = (p) => ({
-    player: p, room, size: oppSize, highlights, marks, targetMode,
-    onCardClick: props.onCardClick, onSeatClick: props.onSeatClick,
-    isAceTarget: targetMode === "ACE" && aceTarget === p.id,
-    isHint: !!props.hintSeatId && props.hintSeatId === p.id,
-  });
-
-  const mySeat = meP && (
-    <MySeat
-      compact={compact} player={meP} meId={meId} room={room} me={me}
-      getVisibleCard={props.getVisibleCard} highlights={highlights} marks={marks}
-      selectedIndex={props.selectedIndex} canReorder={props.canReorder} onReorder={props.onReorder}
-      onMyCardClick={props.onMyCardClick} targetMode={targetMode} onCardClick={props.onCardClick}
-    />
-  );
-
-  const arrowLayer = <ArrowLayer rootRef={rootRef} arrows={props.arrows ?? []} dep={`${tableHeight}${mobile}${Object.values(room.handSizes ?? {}).join(",")}`} />;
-
-  if (mobile) {
-    return (
-      <div ref={rootRef} style={{ position: "relative", background: "radial-gradient(ellipse at center, #1f5c2c, #123a1b)", border: "3px solid #5a3d1e", borderRadius: 24, padding: "14px 6px", display: "flex", flexDirection: "column", gap: 18 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
-          {others.map((p) => <OpponentSeat key={p.id} {...seatProps(p)} />)}
-        </div>
-        {center}
-        {mySeat}
-        {arrowLayer}
-      </div>
-    );
-  }
-
-  // Desktop: oval table, other players spread along the top arc
-  return (
-    <div ref={rootRef} style={{
-      position: "relative", height: tableHeight, borderRadius: "50% / 42%",
-      background: "radial-gradient(ellipse at center, #236b32 0%, #17482100 100%), radial-gradient(ellipse at center, #1f5c2c, #123a1b)",
-      border: "6px solid #5a3d1e", boxShadow: "inset 0 0 60px rgba(0,0,0,0.5), 0 6px 18px rgba(0,0,0,0.5)",
-    }}>
-      {others.map((p, k) => {
-        const { x, y } = seatPosition(k, n, tiny);
-        return (
-          <div key={p.id} style={{ position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)", width: "max-content", maxWidth: n > 5 ? 150 : undefined }}>
-            <OpponentSeat {...seatProps(p)} />
-          </div>
-        );
-      })}
-      <div style={{ position: "absolute", left: "50%", top: tiny ? "41%" : compact ? "44%" : "47%", transform: "translate(-50%, -50%)" }}>{center}</div>
-      <div style={{ position: "absolute", left: "50%", bottom: 8, transform: "translateX(-50%)", width: "80%" }}>{mySeat}</div>
-      {arrowLayer}
-    </div>
   );
 }

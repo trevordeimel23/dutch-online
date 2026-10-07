@@ -1,0 +1,125 @@
+/* Design tokens — every color, space, radius, shadow and font used by the UI lives here. */
+:root {
+  /* Surfaces */
+  --bg: #0e1320;
+  --bg-glow: #17203a;
+  --surface: #161c2c;
+  --surface-2: #1d2540;
+  --surface-3: #263052;
+  --border: #242c42;
+  --border-strong: #34406a;
+  --scrim: rgba(6, 9, 18, 0.72);
+  --ink-35: rgba(0, 0, 0, 0.35);
+  --ink-40: rgba(0, 0, 0, 0.4);
+
+  /* Table */
+  --felt: #1f6b4a;
+  --felt-light: #2a8a60;
+  --felt-dark: #154b34;
+  --rim: #3a8f72;
+  --rim-glow: rgba(94, 214, 170, 0.28);
+
+  /* Text */
+  --text: #eef1f8;
+  --text-muted: #9aa6c0;
+  --text-dim: #6f7b98;
+  --text-on-accent: #1b1405;
+
+  /* Accent (your turn + primary actions only) */
+  --accent: #f5b841;
+  --accent-strong: #ffcb5e;
+  --accent-soft: rgba(245, 184, 65, 0.16);
+  --accent-glow: rgba(245, 184, 65, 0.55);
+
+  /* Semantic */
+  --ok: #4fc38a;
+  --ok-soft: rgba(79, 195, 138, 0.16);
+  --danger: #e5615b;
+  --danger-soft: rgba(229, 97, 91, 0.16);
+  --info: #6aa9f5;
+  --info-soft: rgba(106, 169, 245, 0.16);
+  --violet: #b48cf2;
+  --teal: #4cc9d6;
+
+  /* Table-event highlights */
+  --hl-swap: var(--info);
+  --hl-moved: var(--teal);
+  --hl-match: var(--ok);
+  --hl-fail: var(--danger);
+  --hl-jack: var(--violet);
+  --hl-queen: var(--info);
+  --hl-penalty: var(--danger);
+  --hl-pick: var(--text);
+  --hl-hint: var(--ok);
+
+  /* Cards */
+  --card-face: #f7f5ee;
+  --card-ink: #1b2030;
+  --card-red: #d64545;
+  --card-back: #2b3a67;
+  --card-back-2: #34467c;
+  --card-back-line: rgba(255, 255, 255, 0.16);
+  --card-edge: rgba(0, 0, 0, 0.35);
+
+  /* Avatars */
+  --av-1: #5b8def;
+  --av-2: #e0707a;
+  --av-3: #4fc38a;
+  --av-4: #b48cf2;
+  --av-5: #e59a52;
+  --av-6: #4cc9d6;
+  --av-7: #d96fb0;
+  --av-8: #8fb85a;
+  --av-bot: #7886a8;
+
+  /* Spacing (8px scale) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* Shape */
+  --r-card: 10px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  /* Elevation */
+  --shadow-1: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.55);
+
+  /* Type */
+  --font: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --fs-xs: 11px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 24px;
+
+  /* Motion */
+  --t-fast: 150ms;
+  --t-med: 200ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Layout sizes that scale with the viewport (width of a card; height is 1.4x) */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --card-hand: clamp(40px, min(15.5vw, 12.5dvh), 92px);
+  --card-pile: clamp(36px, min(12.5vw, 10.5dvh), 82px);
+  --card-opp: clamp(16px, min(5.2vw, 4.4dvh), 40px);
+  --card-opp-s: clamp(12px, min(3.8vw, 3.2dvh), 28px);
+  --avatar: clamp(30px, min(9vw, 7.4dvh), 58px);
+  --btn-h: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0.01ms;
+    --t-med: 0.01ms;
+  }
+}

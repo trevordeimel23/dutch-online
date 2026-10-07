@@ -13,7 +13,7 @@ export function useIsMobile(breakpoint = 700) {
   return mobile;
 }
 
-// ── Card display helpers ────────────────────────────────────────────────────
+// ── Card helpers ────────────────────────────────────────────────────────────
 
 // Normalize any suit representation to a Unicode symbol
 const SUIT_SYMBOL = {
@@ -40,132 +40,75 @@ function isRed(card) {
   return suit === "♥" || suit === "♦";
 }
 
-// Highlight kinds drawn around cards when something happens at the table
-const HIGHLIGHTS = {
-  swap:    { color: "#ffd700", tag: "placed" },
-  moved:   { color: "#4dd0e1", tag: "moved" },
-  match:   { color: "#66bb6a", tag: "matched" },
-  fail:    { color: "#ef5350", tag: "wrong!" },
-  jack:    { color: "#ce93d8", tag: "swapped" },
-  queen:   { color: "#64b5f6", tag: "peeked" },
-  penalty: { color: "#ef5350", tag: "penalty" },
-  pick:    { color: "#ffffff", tag: "" },
-  hint:    { color: "#69f0ae", tag: "try this" },
+// Short tags shown above a card when something just happened to it
+export const HIGHLIGHT_TAGS = {
+  swap: "placed", moved: "moved", match: "matched", fail: "wrong", jack: "swapped",
+  queen: "peeked", penalty: "penalty", pick: "", hint: "try this",
 };
 
-const SIZES = {
-  desktop: {
-    xxs: { width: 24, height: 34, center: 9, corner: 6 },
-    xs: { width: 34, height: 48, center: 13, corner: 8 },
-    sm: { width: 48, height: 68, center: 18, corner: 10 },
-    md: { width: 70, height: 98, center: 26, corner: 12 },
-    lg: { width: 88, height: 124, center: 32, corner: 14 },
-  },
-  mobile: {
-    xxs: { width: 22, height: 31, center: 9, corner: 6 },
-    xs: { width: 30, height: 42, center: 12, corner: 7 },
-    sm: { width: 40, height: 56, center: 16, corner: 9 },
-    md: { width: 58, height: 82, center: 22, corner: 11 },
-    lg: { width: 72, height: 102, center: 28, corner: 12 },
-  },
+// Card width comes from a CSS variable (so it scales with the viewport); height is 1.4x the width.
+const SIZE_VAR = {
+  hand: "var(--card-hand)", pile: "var(--card-pile)", opp: "var(--card-opp)", oppS: "var(--card-opp-s)",
+  big: "clamp(64px, 22vw, 120px)",
+  handFit: "var(--hand-w, var(--card-hand))",
+  // legacy names
+  xxs: "var(--card-opp-s)", xs: "var(--card-opp)", sm: "var(--card-opp)", md: "var(--card-hand)", lg: "var(--card-pile)",
 };
 
-export function cardDims(size, mobile) {
-  const set = mobile ? SIZES.mobile : SIZES.desktop;
-  return set[size] || set.md;
+function cardStyle(size, extra) {
+  return { "--w": SIZE_VAR[size] || SIZE_VAR.hand, ...extra };
 }
 
-function frameStyle(s, { selected, highlight, onClick, dimmed, lifted }) {
-  const h = highlight ? HIGHLIGHTS[highlight] : null;
-  const ring = h ? h.color : selected ? "#ffd700" : null;
-  return {
-    width: s.width, height: s.height,
-    borderRadius: 8,
-    border: ring ? `3px solid ${ring}` : "2px solid #bbb",
-    boxSizing: "border-box",
-    cursor: onClick ? "pointer" : "default",
-    boxShadow: ring
-      ? `0 0 14px ${ring}, 2px 3px 8px rgba(0,0,0,0.5)`
-      : "2px 3px 8px rgba(0,0,0,0.5)",
-    position: "relative",
-    userSelect: "none",
-    flexShrink: 0,
-    opacity: dimmed ? 0.6 : 1,
-    transform: selected || lifted ? "translateY(-6px)" : "none",
-    transition: "transform 0.15s, box-shadow 0.15s, border-color 0.15s",
-    animation: h && highlight !== "pick" ? "cardPulse 0.9s ease-in-out 3" : undefined,
-  };
+function classes(base, { selected, highlight, onClick, dimmed }) {
+  return [
+    "card", base,
+    selected ? "card--selected" : "",
+    highlight ? "card--hl" : "",
+    onClick ? "card--tap" : "",
+    dimmed ? "card--dim" : "",
+  ].filter(Boolean).join(" ");
 }
 
 function Tag({ highlight }) {
-  const h = highlight ? HIGHLIGHTS[highlight] : null;
-  if (!h || !h.tag) return null;
-  return (
-    <div style={{
-      position: "absolute", top: -17, left: "50%", transform: "translateX(-50%)",
-      background: h.color, color: "#111", fontSize: 10, fontWeight: "bold", fontFamily: "sans-serif",
-      padding: "1px 6px", borderRadius: 8, whiteSpace: "nowrap", zIndex: 3, pointerEvents: "none",
-    }}>{h.tag}</div>
-  );
+  const text = highlight ? HIGHLIGHT_TAGS[highlight] : "";
+  if (!text) return null;
+  return <div className="card__tag">{text}</div>;
 }
 
 function SlotLabel({ label }) {
   if (label === undefined) return null;
-  return (
-    <div style={{ position: "absolute", bottom: -18, left: 0, right: 0, textAlign: "center", fontSize: 10, color: "#aed6f1", fontFamily: "sans-serif", pointerEvents: "none" }}>
-      #{label}
-    </div>
-  );
+  return <div className="card__slot">{label}</div>;
 }
 
-export function CardFace({ card, size = "md", selected, onClick, label, dimmed, highlight, ...rest }) {
-  const mobile = useIsMobile();
+export function CardFace({ card, size = "hand", selected, onClick, label, dimmed, highlight, style, className = "", ...rest }) {
   const { rank, suit } = splitCard(card);
-  const s = cardDims(size, mobile);
-  const red = isRed(card);
   return (
     <div
       onClick={onClick}
+      data-hl={highlight || undefined}
       {...rest}
-      style={{
-        ...frameStyle(s, { selected, highlight, onClick, dimmed }),
-        background: dimmed ? "#e8e8e8" : "#fffef8",
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        color: red ? "#c0392b" : "#1a1a1a",
-        fontFamily: "Georgia, 'Times New Roman', serif",
-        ...rest.style,
-      }}
+      className={classes("card--face", { selected, highlight, onClick, dimmed }) + (isRed(card) ? " card--red" : "") + (className ? ` ${className}` : "")}
+      style={cardStyle(size, style)}
     >
       <Tag highlight={highlight} />
-      <div style={{ position: "absolute", top: 3, left: 5, fontSize: s.corner, lineHeight: 1.1, fontWeight: "bold" }}>
-        {rank}<br />{suit}
-      </div>
-      <div style={{ fontSize: s.center, lineHeight: 1 }}>{suit}</div>
-      <div style={{ position: "absolute", bottom: 3, right: 5, fontSize: s.corner, lineHeight: 1.1, fontWeight: "bold", transform: "rotate(180deg)" }}>
-        {rank}<br />{suit}
-      </div>
+      <div className="card__corner">{rank}<span>{suit}</span></div>
+      <div className="card__pip">{suit}</div>
       <SlotLabel label={label} />
     </div>
   );
 }
 
-export function CardBack({ size = "md", selected, onClick, label, highlight, ...rest }) {
-  const mobile = useIsMobile();
-  const s = cardDims(size, mobile);
+export function CardBack({ size = "hand", selected, onClick, label, highlight, style, className = "", ...rest }) {
   return (
     <div
       onClick={onClick}
+      data-hl={highlight || undefined}
       {...rest}
-      style={{
-        ...frameStyle(s, { selected, highlight, onClick }),
-        background: "repeating-linear-gradient(45deg, #1a237e, #1a237e 4px, #283593 4px, #283593 8px)",
-        border: highlight || selected ? frameStyle(s, { selected, highlight }).border : "2px solid #555",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        ...rest.style,
-      }}
+      className={classes("card--back", { selected, highlight, onClick }) + (className ? ` ${className}` : "")}
+      style={cardStyle(size, style)}
     >
       <Tag highlight={highlight} />
-      <div style={{ width: "76%", height: "80%", border: "2px solid rgba(255,255,255,0.25)", borderRadius: 4, pointerEvents: "none" }} />
+      <div className="card__back-inner" />
       <SlotLabel label={label} />
     </div>
   );
