@@ -52,7 +52,7 @@ function EffectPicker({ c, nameOf }) {
   const selLabel = type === "JACK"
     ? `${nameOf(c.jackA.playerId)} #${c.jackA.index}  ⇄  ${nameOf(c.jackB.playerId)} #${c.jackB.index}`
     : `${nameOf(c.queenTarget.playerId)} #${c.queenTarget.index}`;
-  const ordered = [...c.players].sort((a, b) => (a.id === meId ? 1 : 0) - (b.id === meId ? 1 : 0)); // you last
+  const ordered = [...c.players].sort((a, b) => (b.id === meId ? 1 : 0) - (a.id === meId ? 1 : 0)); // you first, so your own cards are at the top
 
   return (
     <div className="picker">
