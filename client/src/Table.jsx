@@ -183,40 +183,95 @@ export function Hand({
     return els[0] ? els[0].getBoundingClientRect().width + 8 : 80;
   };
 
-  const down = (e, i) => {
-    dragRef.current = { from: i, sx: e.clientX, sy: e.clientY, active: false, step: measureStep(), n: handSize };
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer may already be gone */ }
+  // One drag controller shared by mouse/pen (pointer events) and fingers (touch events). It reads the latest props
+  // through a ref so the touch listeners, which are attached once, never act on stale data.
+  const cardsRef = useRef(null);
+  const latest = useRef({});
+  latest.current = { canReorder, handSize, onReorder, onMyCardClick, targetMode, onCardClick, meId, me };
+
+  const beginDrag = (from, x, y) => {
+    dragRef.current = { from, sx: x, sy: y, active: false, step: measureStep(), n: latest.current.handSize };
   };
-  const move = (e) => {
+  const moveDrag = (x, y) => {
     const d = dragRef.current;
-    if (!d || !canReorder) return;
-    const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+    if (!d || !latest.current.canReorder) return false;
+    const dx = x - d.sx, dy = y - d.sy;
     if (!d.active && Math.hypot(dx, dy) > 8) d.active = true;
     if (d.active) {
       // Where the card would land if you let go now: the slot its centre is over (it can go before the first / after the last)
       const insertAt = Math.max(0, Math.min(d.n - 1, Math.round(d.from + dx / d.step)));
       setDrag({ from: d.from, dx, dy, insertAt, step: d.step });
     }
+    return d.active;
   };
-  const up = (e) => {
+  const endDrag = (x) => {
     const d = dragRef.current;
     dragRef.current = null;
     if (!d) { setDrag(null); return; }
+    const L = latest.current;
     if (d.active) {
-      const dx = e.clientX - d.sx;
-      const insertAt = Math.max(0, Math.min(d.n - 1, Math.round(d.from + dx / d.step)));
+      const insertAt = Math.max(0, Math.min(d.n - 1, Math.round(d.from + (x - d.sx) / d.step)));
       setDrag(null);
       if (insertAt !== d.from) {
-        onReorder(d.from, insertAt);
-        setSettle({ from: d.from, to: insertAt, step: d.step, me });
+        L.onReorder(d.from, insertAt);
+        setSettle({ from: d.from, to: insertAt, step: d.step, me: L.me });
       }
     } else {
       setDrag(null);
-      if (targetMode === "JACK" || targetMode === "QUEEN") onCardClick(meId, d.from);
-      else onMyCardClick(d.from);
+      if (L.targetMode === "JACK" || L.targetMode === "QUEEN") L.onCardClick(L.meId, d.from);
+      else L.onMyCardClick(d.from);
     }
   };
   const cancel = () => { dragRef.current = null; setDrag(null); };
+
+  // Mouse / pen
+  const down = (e, i) => {
+    if (e.pointerType === "touch") return;
+    beginDrag(i, e.clientX, e.clientY);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer may already be gone */ }
+  };
+  const move = (e) => { if (e.pointerType !== "touch") moveDrag(e.clientX, e.clientY); };
+  const up = (e) => { if (e.pointerType !== "touch") endDrag(e.clientX); };
+
+  // Touch: listeners must be non-passive so the page can't scroll or cancel the gesture while a card is being carried
+  useEffect(() => {
+    const el = cardsRef.current;
+    if (!el) return undefined;
+    let touchId = null;
+    const find = (e) => [...e.changedTouches].find((t) => t.identifier === touchId);
+    const onStart = (e) => {
+      if (touchId !== null) return;
+      const slot = e.target.closest?.("[data-myslot]");
+      if (!slot) return;
+      const t = e.changedTouches[0];
+      touchId = t.identifier;
+      beginDrag(Number(slot.getAttribute("data-myslot")), t.clientX, t.clientY);
+    };
+    const onMove = (e) => {
+      const t = find(e);
+      if (!t || !dragRef.current) return;
+      moveDrag(t.clientX, t.clientY);
+      if (latest.current.canReorder) e.preventDefault();
+    };
+    const onEnd = (e) => {
+      const t = find(e);
+      if (!t) return;
+      touchId = null;
+      endDrag(t.clientX);
+      if (e.cancelable) e.preventDefault(); // we handled the tap ourselves; no ghost click afterwards
+    };
+    const onCancel = () => { touchId = null; cancel(); };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd, { passive: false });
+    el.addEventListener("touchcancel", onCancel);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onCancel);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const meP = room.players.find((p) => p.id === meId);
   const reorders = room.reorders?.[meId] ?? 0;
@@ -242,7 +297,7 @@ export function Hand({
         {reorders > 0 && <span className="seat__shuffle">🔀{reorders}</span>}
         {canReorder && handSize > 1 && <span className="hand__hint">{drag ? `slot ${drag.insertAt}` : "slide a card to move it"}</span>}
       </div>
-      <div className="hand__cards">
+      <div className="hand__cards" ref={cardsRef} style={{ touchAction: canReorder ? "none" : "manipulation" }}>
         {Array.from({ length: handSize }).map((_, i) => {
           const card = getVisibleCard(i);
           const isDragging = drag?.from === i;
@@ -264,7 +319,7 @@ export function Hand({
             onPointerDown: (e) => down(e, i),
             onPointerMove: move,
             onPointerUp: up,
-            onPointerCancel: cancel,
+            onPointerCancel: (e) => { if (e.pointerType !== "touch") cancel(); },
             style: {
               touchAction: canReorder ? "none" : "manipulation",
               cursor: canReorder ? "grab" : "pointer",
