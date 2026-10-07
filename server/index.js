@@ -8,19 +8,42 @@ app.use(cors({ origin: true, credentials: true }));
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: true, credentials: true } });
 
+const crypto = require("crypto");
+const { Bot, BOT_NAMES } = require("./bot");
+
+const PORT = process.env.PORT || 3001;
+const BOT_SECRET = crypto.randomBytes(12).toString("hex"); // lets the server's own bots identify themselves
+
 const rooms = new Map();
+const roomBots = new Map(); // roomId -> Bot[] (computer players, which connect back to this server like any client)
 const roomTimers = new Map(); // roomId -> setTimeout handle for dutch window
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 function makeDeck() {
   const suits = ["S", "H", "D", "C"];
   const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
   const deck = [];
   for (const s of suits) for (const r of ranks) deck.push(`${r}${s}`);
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-  return deck;
+  return shuffle(deck);
+}
+
+// Cards that were discarded earlier are kept so the deck can be reshuffled when it runs out
+// (needed with up to 10 players, where the deck is quickly used up by the deal and penalty cards).
+function setDiscardTop(g, card) {
+  if (g.discardTop) g.discarded.push(g.discardTop);
+  g.discardTop = card;
+}
+function deckHasCards(g) { return g.deck.length + g.discarded.length > 0; }
+function takeFromDeck(g) {
+  if (!g.deck.length && g.discarded.length) g.deck = shuffle(g.discarded.splice(0));
+  return g.deck.pop();
 }
 
 function rankOf(card) { return card.slice(0, -1); }
@@ -137,8 +160,8 @@ function scoreRound(room, roomId) {
       let penaltyTotal = 0;
       const penaltyCards = [];
       for (let i = 0; i < 2; i++) {
-        if (g.deck.length > 0) {
-          const c = g.deck.pop();
+        if (deckHasCards(g)) {
+          const c = takeFromDeck(g);
           penaltyCards.push(c);
           penaltyTotal += cardValue(c);
         }
@@ -236,7 +259,7 @@ function publicRoomView(room) {
   const base = {
     hostId: room.hostId,
     nextDealerId: room.players.length ? room.players[((room.dealerIndex ?? 0) + 1) % room.players.length]?.id ?? null : null,
-    players: room.players.map((p) => ({ id: p.id, name: p.name })),
+    players: room.players.map((p) => ({ id: p.id, name: p.name, isBot: !!p.isBot })),
     phase: g?.phase ?? "LOBBY",
     lookCount: g?.lookCount ?? 0,
     discardTop: g?.discardTop ?? null,
@@ -245,6 +268,7 @@ function publicRoomView(room) {
     pendingEffect: g?.pendingEffect ?? null,
     revealHold: g?.revealHold ?? null,
     finalGraceEndsAt: g?.finalGraceEndsAt ?? null,
+    expectedPlayers: room.expectedPlayers ?? null, // set in play-vs-computer rooms until all bots have joined
     handSizes: Object.fromEntries(room.players.map((p) => [p.id, g?.hands?.get(p.id)?.length ?? 0])),
     reorders: g?.reorders ?? {},
     drawn: publicDrawnCard(g),
@@ -346,6 +370,7 @@ function freshGameState(room, lookCount) {
     turnIndex: room.dealerIndex ?? 0,
     deck,
     discardTop: deck.pop(),
+    discarded: [],
     hands,
     known,
     hasPeeked,
@@ -367,18 +392,43 @@ function freshGameState(room, lookCount) {
 io.on("connection", (socket) => {
   console.log("connected:", socket.id);
 
-  socket.on("room:join", ({ roomId, name }) => {
-    if (!roomId || !name) return;
+  function joinRoom(roomId, name, isBot) {
     socket.join(roomId);
     if (!rooms.has(roomId)) {
       rooms.set(roomId, { hostId: socket.id, players: [], game: { phase: "LOBBY" }, totals: {}, dealerIndex: 0 });
     }
     const room = rooms.get(roomId);
     room.players = room.players.filter((p) => p.id !== socket.id);
-    room.players.push({ id: socket.id, name });
+    room.players.push({ id: socket.id, name, isBot });
     if (!room.hostId) room.hostId = socket.id;
     io.to(roomId).emit("log", `${name} joined room ${roomId}`);
     broadcastRoom(roomId);
+  }
+
+  socket.on("room:join", ({ roomId, name, botSecret }) => {
+    if (!roomId || !name) return;
+    joinRoom(roomId, name, botSecret === BOT_SECRET);
+  });
+
+  // Start a private room against 2–9 computer players
+  socket.on("room:playBots", ({ name, botCount }) => {
+    if (!name) return;
+    const n = Math.min(9, Math.max(2, Math.floor(Number(botCount)) || 3));
+    let roomId;
+    do { roomId = "BOT-" + crypto.randomBytes(2).toString("hex").toUpperCase(); } while (rooms.has(roomId));
+    joinRoom(roomId, name, false);
+    rooms.get(roomId).expectedPlayers = n + 1;
+    socket.emit("room:created", { roomId });
+
+    const bots = [];
+    roomBots.set(roomId, bots);
+    BOT_NAMES.slice(0, n).forEach((botName, i) => {
+      setTimeout(() => {
+        if (!rooms.has(roomId)) return; // human already left
+        const bot = new Bot({ url: `http://127.0.0.1:${PORT}`, roomId, name: botName, secret: BOT_SECRET });
+        bots.push(bot);
+      }, 150 * (i + 1));
+    });
   });
 
   socket.on("game:start", ({ roomId, lookCount }) => {
@@ -553,7 +603,7 @@ io.on("connection", (socket) => {
       if (rankOf(candidate) === rankOf(g.discardTop)) {
         hand.splice(i, 1);
         g.known.set(socket.id, shiftKnownAfterRemoval(g.known.get(socket.id) ?? {}, i));
-        g.discardTop = candidate;
+        setDiscardTop(g, candidate);
         const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
         const effectType = { J: "JACK", Q: "QUEEN", A: "ACE" }[rankOf(candidate)];
         if (effectType) {
@@ -564,8 +614,8 @@ io.on("connection", (socket) => {
         io.to(roomId).emit("log", `${name} MATCHED and discarded!${effectType ? ` ${rankOf(candidate)} effect!` : ""}`);
         broadcastRoom(roomId);
       } else {
-        if (g.deck.length > 0) {
-          hand.push(g.deck.pop());
+        if (deckHasCards(g)) {
+          hand.push(takeFromDeck(g));
           const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
           io.to(roomId).emit("log", `${name} tried to match — wrong! Penalty card added.`);
           emitTable(roomId, { type: "match", ok: false, playerId: socket.id, index: hand.length - 1 });
@@ -589,8 +639,8 @@ io.on("connection", (socket) => {
 
       let card;
       if (source === "DECK") {
-        if (!g.deck.length) { emitError(socket.id, "Deck is empty."); return; }
-        card = g.deck.pop();
+        if (!deckHasCards(g)) { emitError(socket.id, "Deck is empty."); return; }
+        card = takeFromDeck(g);
       } else if (source === "DISCARD") {
         if (!g.discardTop) { emitError(socket.id, "Discard pile is empty."); return; }
         card = g.discardTop;
@@ -616,7 +666,7 @@ io.on("connection", (socket) => {
       if (pending.source !== "DECK") { emitError(socket.id, "Can't immediately discard a card taken from the discard pile."); return; }
 
       const wasSpecial = checkAndSetSpecialEffect(room, pending.card, socket.id);
-      g.discardTop = pending.card;
+      setDiscardTop(g, pending.card);
       g.pendingDraw.set(socket.id, null);
 
       const name = room.players[g.turnIndex].name;
@@ -651,7 +701,7 @@ io.on("connection", (socket) => {
       g.known.set(socket.id, myKnown);
 
       const wasSpecial = checkAndSetSpecialEffect(room, replaced, socket.id);
-      g.discardTop = replaced;
+      setDiscardTop(g, replaced);
       g.pendingDraw.set(socket.id, null);
 
       const name = room.players[g.turnIndex].name;
@@ -761,8 +811,8 @@ io.on("connection", (socket) => {
       const target = room.players.find((p) => p.id === targetPlayerId);
       if (!target) { emitError(socket.id, "Target not found."); return; }
 
-      if (g.deck.length > 0) {
-        const penalty = g.deck.pop();
+      if (deckHasCards(g)) {
+        const penalty = takeFromDeck(g);
         const targetHand = g.hands.get(targetPlayerId);
         targetHand.push(penalty);
         g.hands.set(targetPlayerId, targetHand);
@@ -781,7 +831,13 @@ io.on("connection", (socket) => {
       const before = room.players.length;
       room.players = room.players.filter((p) => p.id !== socket.id);
       if (room.hostId === socket.id) room.hostId = room.players[0]?.id ?? null;
-      if (room.players.length !== before) broadcastRoom(roomId);
+      const humansLeft = room.players.some((p) => !p.isBot);
+      if (!humansLeft && roomBots.has(roomId)) {
+        for (const bot of roomBots.get(roomId)) bot.stop();
+        roomBots.delete(roomId);
+        room.players = [];
+      }
+      if (room.players.length !== before && room.players.length > 0) broadcastRoom(roomId);
       if (room.players.length === 0) {
         clearDutchWindow(room, roomId);
         rooms.delete(roomId);
@@ -791,5 +847,4 @@ io.on("connection", (socket) => {
 });
 
 app.get("/", (req, res) => res.send("Dutch server running"));
-const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`Server listening on ${PORT}`));

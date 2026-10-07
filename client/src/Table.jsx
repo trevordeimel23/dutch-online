@@ -5,13 +5,13 @@ import { CardBack, CardFace, useIsMobile } from "./cards.jsx";
 // Everyone's cards stay in their slots; when someone places, swaps, matches or rearranges a card,
 // the affected slot is highlighted for a few seconds.
 
-function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, onClick }) {
+function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, onClick, small }) {
   return (
     <div
       onClick={onClick}
       style={{
         display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, flexWrap: "wrap",
-        marginBottom: 8, padding: "3px 10px", borderRadius: 14, fontSize: 13,
+        marginBottom: small ? 4 : 8, padding: small ? "2px 6px" : "3px 10px", borderRadius: 14, fontSize: small ? 11 : 13,
         background: isTurn ? "rgba(255,215,0,0.25)" : "rgba(0,0,0,0.35)",
         border: isTarget ? "2px solid #ffffff" : isTurn ? "1px solid rgba(255,215,0,0.7)" : "1px solid rgba(255,255,255,0.12)",
         cursor: onClick ? "pointer" : "default",
@@ -38,8 +38,9 @@ function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCar
   const held = room.drawn?.playerId === player.id ? room.drawn : null;
   const clickable = targetMode === "JACK" || targetMode === "QUEEN";
   return (
-    <div style={{ textAlign: "center", maxWidth: 260 }}>
+    <div style={{ textAlign: "center", maxWidth: size === "xxs" ? 125 : 260 }}>
       <SeatHeader
+        small={size === "xxs"}
         player={player}
         isTurn={player.id === room.turnPlayerId}
         total={room.totals?.[player.id]}
@@ -219,6 +220,25 @@ function ArrowLayer({ rootRef, arrows, dep }) {
   );
 }
 
+// Seat positions (percent of the table) for the k-th opponent clockwise from your left.
+// Up to 5 opponents sit on an arc over the top; with more, some move to rows down each side.
+function seatPosition(k, n, tiny) {
+  if (n <= 5) {
+    const span = n <= 2 ? 0.8 * Math.PI : n <= 4 ? Math.PI : 1.2 * Math.PI;
+    const theta = 1.5 * Math.PI - span / 2 + (span * (k + 0.5)) / n;
+    return { x: 50 + 36 * Math.cos(theta), y: 30 + 22 * Math.sin(theta) + (tiny ? 5 : 10) };
+  }
+  const perSide = n === 6 ? 1 : 2;
+  const top = n - 2 * perSide;
+  const sideYs = perSide === 1 ? [40] : [52, 30];          // lower to upper
+  const topXs = (i) => (top === 1 ? 50 : 22 + (56 * i) / (top - 1));
+  const topY = tiny ? 11 : 12;
+  if (k < perSide) return { x: 8, y: sideYs[k] };            // left side, bottom to top
+  if (k < perSide + top) return { x: topXs(k - perSide), y: topY };
+  const r = k - perSide - top;                               // right side, top to bottom
+  return { x: 92, y: sideYs[perSide - 1 - r] };
+}
+
 export default function Table(props) {
   const rootRef = useRef(null);
   const { room, meId, me, highlights, marks, targetMode, aceTarget } = props;
@@ -234,7 +254,7 @@ export default function Table(props) {
   const tiny = tableHeight < 440;
   const pileSize = mobile ? "md" : tiny ? "sm" : compact ? "md" : "lg";
   const pileDims = { sm: [48, 68], md: [58, 82], lg: [88, 124] }[pileSize];
-  const oppSize = mobile || n >= 4 || compact ? "xs" : "sm";
+  const oppSize = mobile ? (n >= 5 ? "xxs" : "xs") : n >= 6 ? "xxs" : (n >= 4 || compact ? "xs" : "sm");
 
   const center = (
     <div style={{ display: "flex", gap: mobile ? 18 : 28, alignItems: "center", justifyContent: "center" }}>
@@ -289,11 +309,9 @@ export default function Table(props) {
       border: "6px solid #5a3d1e", boxShadow: "inset 0 0 60px rgba(0,0,0,0.5), 0 6px 18px rgba(0,0,0,0.5)",
     }}>
       {others.map((p, k) => {
-        const theta = Math.PI + ((k + 1) / (n + 1)) * Math.PI;
-        const x = 50 + 36 * Math.cos(theta);
-        const y = 30 + 22 * Math.sin(theta) + (tiny ? 5 : 10);
+        const { x, y } = seatPosition(k, n, tiny);
         return (
-          <div key={p.id} style={{ position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)" }}>
+          <div key={p.id} style={{ position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)", width: "max-content", maxWidth: n > 5 ? 150 : undefined }}>
             <OpponentSeat {...seatProps(p)} />
           </div>
         );

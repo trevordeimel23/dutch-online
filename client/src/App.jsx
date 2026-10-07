@@ -100,6 +100,7 @@ export default function App() {
   const mobile = useIsMobile();
 
   const [roomId, setRoomId]   = useState("TEST");
+  const [botCount, setBotCount] = useState(3);
   const [name, setName]       = useState("Trevor");
   const [log, setLog]         = useState([]);
   const [room, setRoom]       = useState(null);
@@ -299,6 +300,8 @@ export default function App() {
     socket.on("me:update",   onMeUpdate);
     socket.on("error",       onError);
     socket.on("table:event", onTableEvent);
+    const onRoomCreated = ({ roomId: id }) => setRoomId(id);
+    socket.on("room:created", onRoomCreated);
 
     return () => {
       socket.off("log",         onLog);
@@ -306,6 +309,7 @@ export default function App() {
       socket.off("me:update",   onMeUpdate);
       socket.off("error",       onError);
       socket.off("table:event", onTableEvent);
+      socket.off("room:created", onRoomCreated);
       if (tickRef.current)          clearInterval(tickRef.current);
       if (dutchWindowTickRef.current) clearInterval(dutchWindowTickRef.current);
     };
@@ -378,6 +382,7 @@ export default function App() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log.length]);
 
+  const playBots = () => socket.emit("room:playBots", { name, botCount });
   const join     = () => socket.emit("room:join",   { roomId, name });
   const start    = () => socket.emit("game:start",  { roomId, lookCount });
   const newRound = () => socket.emit("game:newRound", { roomId, lookCount });
@@ -538,6 +543,18 @@ export default function App() {
                 <Btn onClick={join} disabled={!name.trim() || !roomId.trim()}>Join Room</Btn>
               </div>
             </Panel>
+
+            <Panel title="Play vs Computer" style={{ marginTop: 16 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <label style={{ fontSize: 14, color: "#c8a96e", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  Computer opponents
+                  <select value={botCount} onChange={(e) => setBotCount(Number(e.target.value))} style={selectStyle}>
+                    {[2, 3, 4, 5, 6, 7, 8, 9].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                <Btn variant="success" onClick={playBots} disabled={!name.trim()}>🤖 Play vs Computer</Btn>
+              </div>
+            </Panel>
           </div>
         )}
 
@@ -662,7 +679,9 @@ export default function App() {
                       style={{ ...inputStyle, width: 50, marginLeft: 8, display: "inline" }}
                     />
                   </label>
-                  <Btn variant="success" onClick={start} style={{ width: "100%" }}>Start Game</Btn>
+                  <Btn variant="success" onClick={start} disabled={players.length < (room?.expectedPlayers ?? 1)} style={{ width: "100%" }}>
+                    {players.length < (room?.expectedPlayers ?? 1) ? "Waiting for computer players…" : "Start Game"}
+                  </Btn>
                 </Panel>
               )}
 

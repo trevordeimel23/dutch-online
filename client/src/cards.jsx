@@ -54,12 +54,14 @@ const HIGHLIGHTS = {
 
 const SIZES = {
   desktop: {
+    xxs: { width: 24, height: 34, center: 9, corner: 6 },
     xs: { width: 34, height: 48, center: 13, corner: 8 },
     sm: { width: 48, height: 68, center: 18, corner: 10 },
     md: { width: 70, height: 98, center: 26, corner: 12 },
     lg: { width: 88, height: 124, center: 32, corner: 14 },
   },
   mobile: {
+    xxs: { width: 22, height: 31, center: 9, corner: 6 },
     xs: { width: 30, height: 42, center: 12, corner: 7 },
     sm: { width: 40, height: 56, center: 16, corner: 9 },
     md: { width: 58, height: 82, center: 22, corner: 11 },
