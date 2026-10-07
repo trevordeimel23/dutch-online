@@ -761,7 +761,9 @@ io.on("connection", (socket) => {
 
       const pending = g.pendingDraw.get(socket.id);
       if (!pending) { emitError(socket.id, "No drawn card."); return; }
-      if (pending.source !== "DECK") { emitError(socket.id, "Can't immediately discard a card taken from the discard pile."); return; }
+      // A card taken from the discard pile must go into your hand, unless you have no cards left to swap it with
+      const handLeft = g.hands.get(socket.id)?.length ?? 0;
+      if (pending.source !== "DECK" && handLeft > 0) { emitError(socket.id, "Can't immediately discard a card taken from the discard pile."); return; }
 
       const wasSpecial = checkAndSetSpecialEffect(room, pending.card, socket.id);
       setDiscardTop(g, pending.card);
@@ -892,6 +894,25 @@ io.on("connection", (socket) => {
           completeTurnAction(room, roomId, socket.id);
         }
       }
+      broadcastRoom(roomId);
+    } catch (e) { emitError(socket.id, e.message); }
+  });
+
+  // A Jack or Queen needs a card to act on. If there is none (everyone else's hand is empty), the power is simply skipped.
+  socket.on("effect:skip", ({ roomId }) => {
+    try {
+      const room = getRoomOrThrow(roomId);
+      const g = room.game;
+      if (!g || g.phase !== "PLAY") return;
+      const head = g.effectQueue[0];
+      if (!head || head.actorId !== socket.id) { emitError(socket.id, "No power to skip."); return; }
+      const cards = room.players
+        .filter((p) => p.id !== g.dutchCallerId)
+        .reduce((sum, p) => sum + (g.hands.get(p.id)?.length ?? 0), 0);
+      if (head.type === "ACE" || cards > 0) { emitError(socket.id, "There is a valid target, so this power can't be skipped."); return; }
+      const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
+      io.to(roomId).emit("log", `${name}'s ${head.type.toLowerCase()} has no cards to target and is skipped.`);
+      finishEffect(room, roomId, socket.id, head.source);
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });

@@ -133,6 +133,12 @@ export default function GameScreen({ c }) {
     </Btn>
   );
 
+  // A Jack / Queen with no card anywhere to act on (e.g. everyone else has an empty hand) can only be skipped
+  const cardsOnTable = room.players
+    .filter((p) => p.id !== room.dutchCallerId)
+    .reduce((sum, p) => sum + (room.handSizes?.[p.id] ?? 0), 0);
+  const noTargets = (c.myEffect?.type === "JACK" || c.myEffect?.type === "QUEEN") && cardsOnTable === 0;
+
   let dockRow;
   if (phase === "PEEK") {
     dockRow = me?.hasPeeked ? (
@@ -147,6 +153,14 @@ export default function GameScreen({ c }) {
     dockRow = <><div className="dock__text"><b>Last chance to match</b> — scoring in {c.graceLeft}s</div>{matchBtn}</>;
   } else if (room.revealHold === meId) {
     dockRow = <div className="dock__text"><b>Take a look</b> at your Queen peek, then press Done.</div>;
+  } else if (noTargets) {
+    dockRow = (
+      <>
+        <div className="dock__text"><b>{c.myEffect.type.charAt(0) + c.myEffect.type.slice(1).toLowerCase()}</b> — there are no cards to target</div>
+        <Btn variant="primary" onClick={() => c.emit("effect:skip")}>Skip</Btn>
+        {matchBtn}
+      </>
+    );
   } else if (mobile && c.myEffect) {
     dockRow = (
       <>
@@ -191,7 +205,7 @@ export default function GameScreen({ c }) {
   } else if (c.isMyTurn && c.pending) {
     dockRow = (
       <>
-        <Btn variant="secondary" hint={room.tutorial && c.coach?.action?.type === "discard"} disabled={c.pending.source !== "DECK"} onClick={() => c.emit("turn:discard-drawn")}>Discard</Btn>
+        <Btn variant="secondary" hint={room.tutorial && c.coach?.action?.type === "discard"} disabled={c.pending.source !== "DECK" && c.handSize > 0} onClick={() => c.emit("turn:discard-drawn")}>Discard</Btn>
         <Btn variant="primary" hint={room.tutorial && c.coach?.action?.type === "swap"} onClick={() => c.emit("turn:swap", { index: c.selIdx })}>Swap #{c.selIdx}</Btn>
         {matchBtn}
       </>

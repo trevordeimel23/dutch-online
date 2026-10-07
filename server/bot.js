@@ -340,6 +340,7 @@ class Bot {
 
   planDraw() {
     const top = this.room.discardTop;
+    if (this.handSize === 0) return { source: "DECK", reason: "You have no cards left, so just draw from the deck and discard it." };
     if (!top) return { source: "DECK", reason: "The discard pile is empty, so draw from the deck." };
     if (isBlackKing(top)) return { source: "DECK", reason: `Never take a black king (${label(top)}) — it's worth 13 points, the worst card. Draw from the deck instead.` };
     const v = cardValue(top);
@@ -410,6 +411,8 @@ class Bot {
       return { call: false, reason: `You don't know all your cards yet (card${unknown.length > 1 ? "s" : ""} ${unknown.map((i) => "#" + i).join(", ")} unknown), so calling Dutch is too risky. Pass.` };
     }
     const score = this.knownSum();
+    // Nothing can beat 0 (and a score of 0 always wins the Dutch call), so with an empty hand or only red kings: call it
+    if (score === 0) return { call: true, reason: "Your hand is worth 0 — nothing can beat that. Call Dutch!" };
     const others = this.room.players.filter((p) => p.id !== this.id);
     const size = (p) => this.room.handSizes?.[p.id] ?? 4;
 
@@ -461,7 +464,8 @@ class Bot {
 
   doEffect(type) {
     const plan = this.planEffect(type);
-    if (type === "ACE") this.emit("effect:ace", { targetPlayerId: plan.targetPlayerId });
+    if (plan.skip) this.emit("effect:skip", {});
+    else if (type === "ACE") this.emit("effect:ace", { targetPlayerId: plan.targetPlayerId });
     else if (type === "JACK") this.emit("effect:jack", { a: plan.a, b: plan.b });
     else this.emit("effect:queen", { targetPlayerId: plan.targetPlayerId, targetIndex: plan.targetIndex });
   }
@@ -526,9 +530,13 @@ class Bot {
       if (b >= a) b += 1;
       return { a: { playerId: p.id, index: a }, b: { playerId: p.id, index: b }, reason: `Swap two of ${p.name}'s cards (#${a} and #${b}). ${why}` };
     }
-    // Nothing sensible to do: swap two of my own cards
-    const n = Math.max(this.handSize, 1);
-    return { a: { playerId: this.id, index: 0 }, b: { playerId: this.id, index: Math.min(1, n - 1) }, reason: "There's nobody useful to target — swap two of your own cards." };
+    // Nothing sensible to do: swap any two cards on the table (never the Dutch caller's); the same card twice is a harmless no-op
+    const pool = this.room.players
+      .filter((p) => p.id !== this.room.dutchCallerId)
+      .flatMap((p) => Array.from({ length: this.room.handSizes?.[p.id] ?? 0 }, (_, i) => ({ playerId: p.id, index: i })));
+    if (pool.length >= 2) return { a: pool[0], b: pool[1], reason: "There's nobody useful to target — swap any two cards." };
+    if (pool.length === 1) return { a: pool[0], b: pool[0], reason: "Only one card is on the table, so the swap changes nothing." };
+    return { skip: true, reason: "There are no cards to swap, so this power is skipped." };
   }
 
   planQueen() {
@@ -539,7 +547,10 @@ class Bot {
     }
     // Know everything I own: look at someone else's card, usually whoever has the fewest cards
     const cands = this.targets().filter((p) => (this.room.handSizes?.[p.id] ?? 4) > 0);
-    if (!cands.length) return { targetPlayerId: this.id, targetIndex: 0, reason: "Peek at one of your own cards." };
+    if (!cands.length) {
+      if (this.handSize > 0) return { targetPlayerId: this.id, targetIndex: 0, reason: "Peek at one of your own cards." };
+      return { skip: true, reason: "There are no cards to peek at, so this power is skipped." };
+    }
     const size = (p) => this.room.handSizes?.[p.id] ?? 4;
     const fewest = Math.min(...cands.map(size));
     const pool = Math.random() < 0.8 ? cands.filter((p) => size(p) === fewest) : cands;
@@ -607,7 +618,8 @@ class Bot {
     if (effect) {
       const plan = this.planEffect(effect);
       const names = { ACE: "Ace", JACK: "Jack", QUEEN: "Queen" };
-      const action = effect === "ACE" ? { type: "ace", targetPlayerId: plan.targetPlayerId }
+      const action = plan.skip ? { type: "skip" }
+        : effect === "ACE" ? { type: "ace", targetPlayerId: plan.targetPlayerId }
         : effect === "JACK" ? { type: "jack", a: plan.a, b: plan.b }
         : { type: "queen", targetPlayerId: plan.targetPlayerId, targetIndex: plan.targetIndex };
       return { ...base, headline: `Use your ${names[effect]}!`, text: plan.reason, action };
