@@ -261,6 +261,7 @@ export default function GameScreen({ c }) {
           selectedIndex={phase === "PLAY" ? c.selIdx : -1}
           canReorder={c.canReorder} onReorder={c.onReorder}
           onMyCardClick={c.onMyCardClick} targetMode={c.targetMode} onCardClick={c.onCardClick}
+          extraHint={c.quickMatch === "double" ? "double-tap to match" : c.quickMatch === "tap" ? "tap to match" : ""}
           drawnActive={drawnActive} armed={c.armed} onDrawnTap={c.onDrawnTap} onSwapTo={c.onSwapTo}
           onDiscardDrawn={c.onDiscardDrawn} onDragDrawn={setDraggingDrawn}
         />
@@ -291,6 +292,13 @@ export default function GameScreen({ c }) {
       <Sheet open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Settings">
         <div className="stack">
           <div className="row"><Pill>Room <b>{c.roomId.toUpperCase()}</b></Pill><Pill tone="accent">{lengthText(room.gameLength)}</Pill></div>
+          <Field label="Quick match">
+            <select className="select" value={c.quickMatch} onChange={(e) => c.setQuickMatch(e.target.value)}>
+              <option value="double">Double-tap a card</option>
+              <option value="tap">Single tap a card</option>
+              <option value="off">Off (use the Match button)</option>
+            </select>
+          </Field>
           {room.botSettings ? (
             <>
               <Field label="Computer speed">

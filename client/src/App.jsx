@@ -59,6 +59,15 @@ export default function App() {
   const [queenTarget, setQueenTarget] = useState({ playerId: "", index: 0 });
   const [aceTarget, setAceTarget]   = useState("");
   const [jackStep, setJackStep]     = useState(0);
+  // Quick match: "double" = double-tap one of your cards to match it against the discard pile, "tap" = a single tap, "off"
+  const [quickMatch, setQuickMatchState] = useState(() => {
+    try { return localStorage.getItem("dutch.quickMatch") || "double"; } catch { return "double"; }
+  });
+  const setQuickMatch = (mode) => {
+    setQuickMatchState(mode);
+    try { localStorage.setItem("dutch.quickMatch", mode); } catch { /* storage is optional */ }
+  };
+  const lastTapRef = useRef({ i: -1, t: 0 });
   const [armedCard, setArmedCard]   = useState(null); // the drawn card you tapped to pick up (so the next tap chooses where it goes) // which Jack target the next tap fills in
 
   // Cards you've peeked at stay visible for 15s. Tracked by card (a deck has no duplicates), not slot,
@@ -457,14 +466,24 @@ export default function App() {
       onRules: () => setShowRules(true),
       onCardClick: onTableCardClick,
       onSeatClick: (pid) => setAceTarget(pid),
-      armed,
+      armed, quickMatch, setQuickMatch,
       onDrawnTap: () => setArmedCard((cur) => (cur === pending?.card ? null : pending?.card ?? null)),
       onSwapTo: swapInto,
       onDiscardDrawn: discardDrawn,
       onMyCardClick: (i) => {
         if (armed) { swapInto(i); return; }
-        if (phase === "PLAY") setMatchIndex(i);
-        else if (phase === "PEEK" && !me?.hasPeeked) togglePeekIndex(i);
+        if (phase === "PLAY") {
+          setMatchIndex(i);
+          // Not while you're choosing where a drawn card goes or aiming a power: taps mean something else then
+          const canQuick = quickMatch !== "off" && !!room?.discardTop && !room?.revealHold && !(isMyTurn && pending) && !targetMode;
+          const now = Date.now();
+          const isDouble = lastTapRef.current.i === i && now - lastTapRef.current.t < 380;
+          lastTapRef.current = { i, t: now };
+          if (canQuick && (quickMatch === "tap" || isDouble)) {
+            lastTapRef.current = { i: -1, t: 0 };
+            emit("match:attempt", { index: i });
+          }
+        } else if (phase === "PEEK" && !me?.hasPeeked) togglePeekIndex(i);
       },
       onReorder: (from, to) => { emit("hand:reorder", { from, to }); setMatchIndex(to); setPeekPick([]); },
       hideQueenReveal: () => setQueenReveal(null),

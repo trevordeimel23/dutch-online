@@ -571,7 +571,7 @@ class Bot {
     if (slots.length) {
       return {
         match: slots[0],
-        text: `✋ You can match! The discard pile shows ${label(top)} and your card #${slots[0]} is ${label(k[slots[0]])} — same rank. Select card #${slots[0]} and press Match. You get rid of that card without drawing one.`,
+        text: `✋ You can match! The discard pile shows ${label(top)} and your card #${slots[0]} is ${label(k[slots[0]])} — same rank. Select card #${slots[0]} and press Match (or double-tap it). You get rid of that card without drawing one.`,
       };
     }
     return {

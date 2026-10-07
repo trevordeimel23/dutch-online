@@ -157,7 +157,7 @@ export default function Table({ room, meId, highlights, marks, targetMode, aceTa
 export function Hand({
   room, meId, me, getVisibleCard, highlights, marks, selectedIndex,
   canReorder, onReorder, onMyCardClick, targetMode, onCardClick,
-  drawnActive, armed, onDrawnTap, onSwapTo, onDiscardDrawn, onDragDrawn,
+  drawnActive, armed, onDrawnTap, onSwapTo, onDiscardDrawn, onDragDrawn, extraHint,
 }) {
   const handSize = me?.handSize ?? 0;
   const myDrawn = me?.pendingDraw;
@@ -336,7 +336,7 @@ export function Hand({
         {reorders > 0 && <span className="seat__shuffle">🔀{reorders}</span>}
         {drawnActive
           ? <span className="hand__hint hand__hint--go">{armed ? "Tap a card to swap, or the pile to discard" : "Drag the new card onto a card or the pile"}</span>
-          : canReorder && handSize > 1 && <span className="hand__hint">{drag ? `slot ${drag.insertAt}` : "slide a card to move it"}</span>}
+          : canReorder && handSize > 1 && <span className="hand__hint">{drag ? `slot ${drag.insertAt}` : `slide to move${extraHint ? ` · ${extraHint}` : ""}`}</span>}
       </div>
       <div className="hand__cards" ref={cardsRef} style={{ touchAction: canReorder || drawnActive ? "none" : "manipulation" }}>
         {Array.from({ length: handSize }).map((_, i) => {
