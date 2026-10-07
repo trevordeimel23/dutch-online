@@ -51,6 +51,7 @@ const SIZE_VAR = {
   hand: "var(--card-hand)", pile: "var(--card-pile)", opp: "var(--card-opp)", oppS: "var(--card-opp-s)",
   big: "clamp(64px, 22vw, 120px)",
   handFit: "var(--hand-w, var(--card-hand))",
+  pick: "clamp(34px, 11vw, 56px)",
   // legacy names
   xxs: "var(--card-opp-s)", xs: "var(--card-opp)", sm: "var(--card-opp)", md: "var(--card-hand)", lg: "var(--card-pile)",
 };

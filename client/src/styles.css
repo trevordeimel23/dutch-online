@@ -350,3 +350,21 @@ b { font-weight: 650; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── Power target picker (phones) ───────────────────────────────────────── */
+.picker { display: flex; flex-direction: column; gap: var(--sp-3); }
+.picker .lead { margin: 0; }
+.picker__list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.picker__player { display: flex; align-items: center; gap: var(--sp-3); min-height: 52px; padding: var(--sp-2) var(--sp-3); text-align: left; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); font-size: var(--fs-md); cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast); }
+.picker__player:disabled { opacity: 0.4; cursor: not-allowed; }
+.picker__player--on { border-color: var(--accent); background: var(--accent-soft); }
+.picker__player .avatar { --avatar: 36px; flex: none; }
+.picker__name { flex: 1; min-width: 0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker__meta { color: var(--text-muted); font-size: var(--fs-sm); }
+.picker__row { display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-2); border-radius: var(--r-md); background: var(--surface-2); }
+.picker__row--off { opacity: 0.5; }
+.picker__who { flex: 0 0 64px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 650; }
+.picker__who .avatar { --avatar: 30px; }
+.picker__cards { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2) 6px; padding: 14px 0 18px; }
+.picker__sel { text-align: center; color: var(--text-muted); font-size: var(--fs-sm); min-height: 1.4em; }
+.picker__foot { position: sticky; bottom: 0; margin: 0 calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4)); padding: var(--sp-3) var(--sp-4) var(--sp-4); background: var(--surface); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--sp-2); }

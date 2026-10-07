@@ -1,7 +1,90 @@
-import { useRef, useState } from "react";
-import { CardBack, CardFace } from "./cards.jsx";
+import { useEffect, useRef, useState } from "react";
+import { CardBack, CardFace, useIsMobile } from "./cards.jsx";
 import Table, { ArrowLayer, Hand } from "./Table.jsx";
-import { Btn, Field, IconBtn, Pill, Sheet, lengthText } from "./ui.jsx";
+import { Avatar, Btn, Field, IconBtn, Pill, Sheet, lengthText } from "./ui.jsx";
+
+const EFFECT_TITLES = { JACK: "Jack — swap two cards", QUEEN: "Queen — peek at a card", ACE: "Ace — give a penalty card" };
+
+// Phone-friendly picker for a Jack / Queen / Ace power: everyone's cards (or players) at a readable size.
+function EffectPicker({ c, nameOf }) {
+  const type = c.myEffect.type;
+  const { room, meId } = c;
+  const confirm = () => {
+    if (type === "JACK") c.emit("effect:jack", { a: c.jackA, b: c.jackB });
+    else if (type === "QUEEN") c.emit("effect:queen", { targetPlayerId: c.queenTarget.playerId, targetIndex: c.queenTarget.index });
+    else c.emit("effect:ace", { targetPlayerId: c.aceTarget });
+  };
+  const protectedId = room.dutchCallerId; // nobody may target the Dutch caller
+
+  if (type === "ACE") {
+    const candidates = c.players.filter((p) => p.id !== meId);
+    return (
+      <div className="picker">
+        <p className="lead">Tap the player who gets the penalty card.</p>
+        <div className="picker__list">
+          {candidates.map((p) => {
+            const off = p.id === protectedId;
+            return (
+              <button
+                key={p.id} type="button" disabled={off}
+                className={`picker__player${c.aceTarget === p.id ? " picker__player--on" : ""}`}
+                onClick={() => c.onSeatClick(p.id)}
+              >
+                <Avatar player={p} />
+                <span className="picker__name">{nameOf(p.id)}</span>
+                <span className="picker__meta">{off ? "called Dutch" : `${room.totals?.[p.id] ?? 0} pts · 🂠${room.handSizes?.[p.id] ?? 0}`}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="picker__foot">
+          <Btn variant="primary" block disabled={!c.aceTarget || c.aceTarget === protectedId || c.aceTarget === meId} onClick={confirm}>
+            Give penalty card to {c.aceTarget && c.aceTarget !== meId ? nameOf(c.aceTarget) : "…"}
+          </Btn>
+        </div>
+      </div>
+    );
+  }
+
+  const isSel = (pid, i) => (type === "JACK"
+    ? (c.jackA.playerId === pid && c.jackA.index === i) || (c.jackB.playerId === pid && c.jackB.index === i)
+    : c.queenTarget.playerId === pid && c.queenTarget.index === i);
+  const selLabel = type === "JACK"
+    ? `${nameOf(c.jackA.playerId)} #${c.jackA.index}  ⇄  ${nameOf(c.jackB.playerId)} #${c.jackB.index}`
+    : `${nameOf(c.queenTarget.playerId)} #${c.queenTarget.index}`;
+  const ordered = [...c.players].sort((a, b) => (a.id === meId ? 1 : 0) - (b.id === meId ? 1 : 0)); // you last
+
+  return (
+    <div className="picker">
+      <p className="lead">{type === "JACK" ? "Tap two cards (anyone's, including yours) to swap them." : "Tap any card to look at it."}</p>
+      <div className="picker__list">
+        {ordered.map((p) => {
+          const off = p.id === protectedId;
+          const count = room.handSizes?.[p.id] ?? 0;
+          return (
+            <div key={p.id} className={`picker__row${off ? " picker__row--off" : ""}`}>
+              <div className="picker__who">
+                <Avatar player={p} />
+                <span className="picker__name">{p.id === meId ? "You" : nameOf(p.id)}</span>
+              </div>
+              <div className="picker__cards">
+                {off ? <span className="picker__meta">called Dutch</span> : Array.from({ length: count }).map((_, i) => {
+                  const face = p.id === meId ? c.getVisibleCard(i) : null;
+                  const props = { size: "pick", label: i, highlight: isSel(p.id, i) ? "pick" : c.marks[`${p.id}:${i}`], onClick: () => c.onCardClick(p.id, i), selected: isSel(p.id, i) };
+                  return face ? <CardFace key={i} card={face} {...props} /> : <CardBack key={i} {...props} />;
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="picker__foot">
+        <div className="picker__sel">{selLabel}</div>
+        <Btn variant="primary" block onClick={confirm}>{type === "JACK" ? "Swap these cards" : "Look at this card"}</Btn>
+      </div>
+    </div>
+  );
+}
 
 // The in-game screen: one fixed, full-viewport grid (top bar / table / my hand / action dock) that never scrolls.
 
@@ -12,6 +95,11 @@ export default function GameScreen({ c }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [coachOpen, setCoachOpen] = useState(false);
   const [sheetPid, setSheetPid] = useState(null); // opponent whose cards are shown big (Jack / Queen targeting)
+  const mobile = useIsMobile();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const effectType = c.myEffect?.type ?? null;
+  // On phones the power's target picker opens by itself when you get a Jack / Queen / Ace
+  useEffect(() => { setPickerOpen(mobile && !!effectType); }, [effectType, mobile]);
 
   const nameOf = (pid) => (players.find((p) => p.id === pid)?.name ?? "someone").replace(/^🤖\s*/, "");
   const selText = (sel) => `${nameOf(sel.playerId)} #${sel.index}`;
@@ -52,13 +140,21 @@ export default function GameScreen({ c }) {
     ) : (
       <>
         <div className="dock__text">Tap <b>{c.lookCount}</b> of your cards to peek at them. You can drag to rearrange first.</div>
-        <Btn variant="primary" disabled={c.peekPick.length !== c.lookCount} onClick={c.submitPeek}>Peek ({c.peekPick.length}/{c.lookCount})</Btn>
+        <Btn variant="primary" disabled={c.peekPick.length !== c.lookCount} onClick={c.submitPeek}>Confirm ({c.peekPick.length}/{c.lookCount})</Btn>
       </>
     );
   } else if (room.finalGraceEndsAt) {
     dockRow = <><div className="dock__text"><b>Last chance to match</b> — scoring in {c.graceLeft}s</div>{matchBtn}</>;
   } else if (room.revealHold === meId) {
     dockRow = <div className="dock__text"><b>Take a look</b> at your Queen peek, then press Done.</div>;
+  } else if (mobile && c.myEffect) {
+    dockRow = (
+      <>
+        <div className="dock__text"><b>{c.myEffect.type.charAt(0) + c.myEffect.type.slice(1).toLowerCase()}</b> — choose your target</div>
+        <Btn variant="primary" onClick={() => setPickerOpen(true)}>Choose…</Btn>
+        {matchBtn}
+      </>
+    );
   } else if (c.myEffect?.type === "JACK") {
     dockRow = (
       <>
@@ -71,7 +167,7 @@ export default function GameScreen({ c }) {
     dockRow = (
       <>
         <div className="dock__text"><b>Queen</b> — tap a card to peek: {selText(c.queenTarget)}</div>
-        <Btn variant="primary" onClick={() => c.emit("effect:queen", { targetPlayerId: c.queenTarget.playerId, targetIndex: c.queenTarget.index })}>Peek</Btn>
+        <Btn variant="primary" onClick={() => c.emit("effect:queen", { targetPlayerId: c.queenTarget.playerId, targetIndex: c.queenTarget.index })}>Look</Btn>
         {matchBtn}
       </>
     );
@@ -161,6 +257,10 @@ export default function GameScreen({ c }) {
       <ArrowLayer rootRef={gameRef} arrows={c.arrows} dep={`${room.players.length}${Object.values(room.handSizes ?? {}).join(",")}`} />
 
       {/* ── Sheets and popups ─────────────────────────────────────────────── */}
+      <Sheet open={pickerOpen && mobile && !!c.myEffect} onClose={() => setPickerOpen(false)} title={c.myEffect ? EFFECT_TITLES[c.myEffect.type] : ""}>
+        {c.myEffect && <EffectPicker c={c} nameOf={nameOf} />}
+      </Sheet>
+
       <Sheet open={logOpen} onClose={() => setLogOpen(false)} title="Activity" side>
         <div className="log">{c.log.slice(-80).map((l, i) => <div key={i}>{l}</div>)}</div>
       </Sheet>
