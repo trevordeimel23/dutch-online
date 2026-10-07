@@ -278,9 +278,8 @@ class Bot {
   }
 
   pendingEffectType() {
-    const room = this.room;
-    if (room.pendingEffect && room.pendingEffect.actorId === this.id && room.turnPlayerId === this.id) return room.pendingEffect.type;
-    return this.me?.matchEffect ?? null;
+    const pe = this.room?.pendingEffect;
+    return pe && pe.actorId === this.id ? pe.type : null;
   }
 
   // ── peek ──────────────────────────────────────────────────────────────────

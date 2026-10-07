@@ -91,7 +91,7 @@ function isPlayersTurn(room, playerId) {
 // Last turn after Dutch ended with a Queen peek: give the player time to look before scoring
 function holdForReveal(room, roomId, playerId) {
   const g = room.game;
-  g.pendingEffect = null;
+  syncPending(g);
   g.revealHold = playerId;
   clearDutchWindow(room, roomId);
   const timer = setTimeout(() => releaseRevealHold(roomId), 20000);
@@ -207,6 +207,8 @@ function scoreRound(room, roomId) {
     io.to(roomId).emit("log", names.length > 1 ? `Game over! It's a tie between ${names.join(" and ")}.` : `Game over! ${names[0]} wins!`);
   }
 
+  g.effectQueue = [];
+  g.pendingEffect = null;
   g.phase = "SCORING";
   g.roundScores = scores;
   g.revealedHands = revealedHands;
@@ -220,7 +222,7 @@ const FINAL_GRACE_MS = 10000;
 // Last turn after Dutch is done: everyone gets a short window for last-second matches before scoring
 function startFinalGrace(room, roomId) {
   const g = room.game;
-  g.pendingEffect = null;
+  syncPending(g);
   g.finalGraceEndsAt = Date.now() + FINAL_GRACE_MS;
   clearDutchWindow(room, roomId);
   const timer = setTimeout(() => {
@@ -238,7 +240,7 @@ function startFinalGrace(room, roomId) {
 function nextTurn(room, roomId) {
   const g = room.game;
   if (!g) return;
-  g.pendingEffect = null;
+  syncPending(g);
 
   if (g.dutchCallerId !== null) {
     g.dutchTurnsLeft = (g.dutchTurnsLeft ?? 0) - 1;
@@ -255,7 +257,6 @@ function nextTurn(room, roomId) {
 
 // After a turn action completes: start dutch window if Dutch not yet called, else just next turn
 function completeTurnAction(room, roomId, playerId) {
-  room.game.pendingEffect = null; // effect (if any) is resolved, so its panel must go away
   if (room.game?.dutchCallerId) {
     nextTurn(room, roomId);
   } else {
@@ -290,6 +291,7 @@ function publicRoomView(room) {
     deckCount: g?.deck?.length ?? 0,
     turnPlayerId: g?.phase === "PLAY" && !g.finalGraceEndsAt ? room.players[g.turnIndex]?.id ?? null : null,
     pendingEffect: g?.pendingEffect ?? null,
+    effectQueue: (g?.effectQueue ?? []).map((e) => ({ type: e.type, actorId: e.actorId })),
     revealHold: g?.revealHold ?? null,
     finalGraceEndsAt: g?.finalGraceEndsAt ?? null,
     gameLength: room.gameLength ?? DEFAULT_GAME_LENGTH,
@@ -329,7 +331,7 @@ function privateViewFor(room, playerId) {
     hasPeeked: g?.hasPeeked?.has(playerId) ?? false,
     pendingDraw: g?.pendingDraw?.get(playerId) ?? null,
     // One-shot Queen result, only ever sent to the player who used the Queen
-    matchEffect: g?.matchEffects?.[playerId]?.[0] ?? null,
+    matchEffect: g?.pendingEffect?.source === "match" && g.pendingEffect.actorId === playerId ? g.pendingEffect.type : null,
     queenReveal: g?.peekRevealFor?.[playerId] ?? null,
   };
 }
@@ -365,28 +367,47 @@ function shiftKnownAfterRemoval(knownObj, removedIndex) {
   return out;
 }
 
+// Powers are used strictly in the order the cards hit the pile: g.effectQueue is first-in-first-out, and only the
+// player at the head may use their power. g.pendingEffect always mirrors the head (null when the queue is empty).
+// While anything is queued nobody can start a new turn (draw / call Dutch are blocked), but matching still works.
+function syncPending(g) {
+  const head = g.effectQueue?.[0];
+  g.pendingEffect = head ? { type: head.type, actorId: head.actorId, source: head.source } : null;
+}
+
+function enqueueEffect(g, type, actorId, source) {
+  g.effectQueue.push({ type, actorId, source });
+  syncPending(g);
+}
+
+function shiftEffect(g) {
+  g.effectQueue.shift();
+  syncPending(g);
+}
+
 function checkAndSetSpecialEffect(room, card, actorId) {
   const g = room.game;
   const r = rankOf(card);
   if (r === "J" || r === "Q" || r === "A") {
-    g.pendingEffect = { type: r === "J" ? "JACK" : r === "Q" ? "QUEEN" : "ACE", actorId };
+    enqueueEffect(g, r === "J" ? "JACK" : r === "Q" ? "QUEEN" : "ACE", actorId, "turn");
     return true;
   }
   return false;
 }
 
-// Which kind of effect is this player resolving? "turn" = their own discard, "match" = a card they matched out of turn
+// Is this player allowed to use this power right now? Only the head of the queue. Returns its source:
+// "turn" = they discarded it on their own turn, "match" = they matched it.
 function effectSource(room, playerId, type) {
   const g = room.game;
   if (!g || g.phase !== "PLAY" || g.revealHold) return null;
-  if (g.pendingEffect?.type === type && g.pendingEffect.actorId === playerId && isPlayersTurn(room, playerId)) return "turn";
-  if (g.matchEffects?.[playerId]?.[0] === type) return "match";
+  const head = g.effectQueue?.[0];
+  if (head && head.type === type && head.actorId === playerId) return head.source;
   return null;
 }
 
 function finishEffect(room, roomId, playerId, source) {
-  if (source === "match") room.game.matchEffects[playerId].shift();
-  else completeTurnAction(room, roomId, playerId);
+  shiftEffect(room.game);
+  if (source === "turn") completeTurnAction(room, roomId, playerId);
 }
 
 function freshGameState(room, lookCount) {
@@ -415,7 +436,7 @@ function freshGameState(room, lookCount) {
     pendingDraw,
     pendingEffect: null,
     reorders: {}, // playerId -> times they rearranged their hand this round
-    matchEffects: {}, // playerId -> queue of effect types earned by matching out of turn
+    effectQueue: [], // special-card powers waiting to be used, oldest first
     peekRevealFor: {},
     dutchCallerId: null,
     dutchTurnsLeft: null,
@@ -677,10 +698,7 @@ io.on("connection", (socket) => {
         setDiscardTop(g, candidate);
         const name = room.players.find((p) => p.id === socket.id)?.name ?? "Someone";
         const effectType = { J: "JACK", Q: "QUEEN", A: "ACE" }[rankOf(candidate)];
-        if (effectType) {
-          if (!g.matchEffects[socket.id]) g.matchEffects[socket.id] = [];
-          g.matchEffects[socket.id].push(effectType);
-        }
+        if (effectType) enqueueEffect(g, effectType, socket.id, "match");
         emitTable(roomId, { type: "match", ok: true, playerId: socket.id, index: i, card: candidate });
         io.to(roomId).emit("log", `${name} MATCHED and discarded!${effectType ? ` ${rankOf(candidate)} effect!` : ""}`);
         broadcastRoom(roomId);
@@ -857,12 +875,13 @@ io.on("connection", (socket) => {
       io.to(roomId).emit("log", `${actor} used Queen to peek a card from ${tName}.`);
       emitTable(roomId, { type: "queen", playerId: socket.id, targetPlayerId, index: ti });
 
-      if (source === "match") {
-        g.matchEffects[socket.id].shift();
-      } else if (g.dutchCallerId && (g.dutchTurnsLeft ?? 0) <= 1) {
-        holdForReveal(room, roomId, socket.id); // this was the final turn: let them look before scoring
-      } else {
-        completeTurnAction(room, roomId, socket.id);
+      shiftEffect(g);
+      if (source === "turn") {
+        if (g.dutchCallerId && (g.dutchTurnsLeft ?? 0) <= 1) {
+          holdForReveal(room, roomId, socket.id); // this was the final turn: let them look before scoring
+        } else {
+          completeTurnAction(room, roomId, socket.id);
+        }
       }
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }

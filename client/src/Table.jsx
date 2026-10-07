@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CardBack, CardFace, useIsMobile } from "./cards.jsx";
 import { Avatar } from "./ui.jsx";
 
@@ -160,19 +160,31 @@ export function Hand({
 }) {
   const handSize = me?.handSize ?? 0;
   const myDrawn = me?.pendingDraw;
+  // drag: a card is being carried. settle: it was just dropped and is sliding into its new slot while we wait
+  // for the server to confirm the new order.
   const [drag, setDrag] = useState(null);
+  const [settle, setSettle] = useState(null);
   const dragRef = useRef(null);
 
-  const slotAt = (x, y, ignore) => {
-    for (const el of document.elementsFromPoint(x, y)) {
-      const slot = el.closest?.("[data-myslot]")?.getAttribute("data-myslot");
-      if (slot !== null && slot !== undefined && Number(slot) !== ignore) return Number(slot);
-    }
-    return null;
+  // The settle offsets only apply to the hand they were made for. The moment the server sends the new order (a new `me`),
+  // the cards are already in their final slots, so drop the offsets in that same render (no flash, no animation).
+  const settleLive = settle && settle.me === me ? settle : null;
+  const settleStale = !!settle && settle.me !== me;
+  useEffect(() => { if (settleStale) setSettle(null); }, [settleStale]);
+  useEffect(() => {
+    if (!settle) return undefined;
+    const id = setTimeout(() => setSettle(null), 900);
+    return () => clearTimeout(id);
+  }, [settle]);
+
+  const measureStep = () => {
+    const els = document.querySelectorAll("[data-myslot]");
+    if (els.length >= 2) return els[1].getBoundingClientRect().left - els[0].getBoundingClientRect().left;
+    return els[0] ? els[0].getBoundingClientRect().width + 8 : 80;
   };
 
   const down = (e, i) => {
-    dragRef.current = { from: i, sx: e.clientX, sy: e.clientY, active: false };
+    dragRef.current = { from: i, sx: e.clientX, sy: e.clientY, active: false, step: measureStep(), n: handSize };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer may already be gone */ }
   };
   const move = (e) => {
@@ -180,20 +192,28 @@ export function Hand({
     if (!d || !canReorder) return;
     const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
     if (!d.active && Math.hypot(dx, dy) > 8) d.active = true;
-    if (d.active) setDrag({ from: d.from, dx, dy, over: slotAt(e.clientX, e.clientY, d.from) });
+    if (d.active) {
+      // Where the card would land if you let go now: the slot its centre is over (it can go before the first / after the last)
+      const insertAt = Math.max(0, Math.min(d.n - 1, Math.round(d.from + dx / d.step)));
+      setDrag({ from: d.from, dx, dy, insertAt, step: d.step });
+    }
   };
   const up = (e) => {
     const d = dragRef.current;
     dragRef.current = null;
-    setDrag(null);
-    if (!d) return;
+    if (!d) { setDrag(null); return; }
     if (d.active) {
-      const to = slotAt(e.clientX, e.clientY, d.from);
-      if (to !== null && to !== d.from) onReorder(d.from, to);
-    } else if (targetMode === "JACK" || targetMode === "QUEEN") {
-      onCardClick(meId, d.from);
+      const dx = e.clientX - d.sx;
+      const insertAt = Math.max(0, Math.min(d.n - 1, Math.round(d.from + dx / d.step)));
+      setDrag(null);
+      if (insertAt !== d.from) {
+        onReorder(d.from, insertAt);
+        setSettle({ from: d.from, to: insertAt, step: d.step, me });
+      }
     } else {
-      onMyCardClick(d.from);
+      setDrag(null);
+      if (targetMode === "JACK" || targetMode === "QUEEN") onCardClick(meId, d.from);
+      else onMyCardClick(d.from);
     }
   };
   const cancel = () => { dragRef.current = null; setDrag(null); };
@@ -202,22 +222,41 @@ export function Hand({
   const reorders = room.reorders?.[meId] ?? 0;
   const total = room.totals?.[meId];
 
+  // Where each card should visually sit right now (others slide aside to open a gap at the drop position)
+  const layout = drag
+    ? { from: drag.from, to: drag.insertAt, step: drag.step, dragging: true }
+    : settleLive ? { from: settleLive.from, to: settleLive.to, step: settleLive.step, dragging: false } : null;
+  const offsetFor = (i) => {
+    if (!layout) return 0;
+    const { from, to, step } = layout;
+    if (from < to && i > from && i <= to) return -step;
+    if (from > to && i < from && i >= to) return step;
+    return 0;
+  };
+
   return (
     <div className="hand" style={{ "--n": Math.max(handSize + (myDrawn ? 1 : 0), 1) }}>
       <div className="hand__meta">
         <span className="hand__name">{meP ? meP.name : "You"}</span>
         {total !== undefined && <span className="seat__score">{total}</span>}
         {reorders > 0 && <span className="seat__shuffle">🔀{reorders}</span>}
-        {canReorder && handSize > 1 && <span className="hand__hint">drag to rearrange</span>}
+        {canReorder && handSize > 1 && <span className="hand__hint">{drag ? `slot ${drag.insertAt}` : "slide a card to move it"}</span>}
       </div>
       <div className="hand__cards">
         {Array.from({ length: handSize }).map((_, i) => {
           const card = getVisibleCard(i);
           const isDragging = drag?.from === i;
-          const hl = highlights[`${meId}:${i}`] ?? marks[`${meId}:${i}`] ?? (drag && drag.over === i ? "moved" : undefined);
+          const isSettling = !drag && settleLive?.from === i;
+          const hl = highlights[`${meId}:${i}`] ?? marks[`${meId}:${i}`];
+          let transform;
+          let transition;
+          if (isDragging) { transform = `translate(${drag.dx}px, ${drag.dy}px) scale(1.06)`; transition = "none"; }
+          else if (isSettling) { transform = `translateX(${(settleLive.to - settleLive.from) * settleLive.step}px)`; transition = "transform var(--t-med) var(--ease)"; }
+          else if (layout) { transform = `translateX(${offsetFor(i)}px)`; transition = "transform var(--t-med) var(--ease)"; }
+          if (settleStale) { transform = "none"; transition = "none"; }
           const common = {
             size: "handFit",
-            selected: selectedIndex === i,
+            selected: selectedIndex === i && !layout,
             highlight: hl,
             label: i,
             "data-myslot": i,
@@ -229,9 +268,8 @@ export function Hand({
             style: {
               touchAction: canReorder ? "none" : "manipulation",
               cursor: canReorder ? "grab" : "pointer",
-              zIndex: isDragging ? 20 : undefined,
-              transform: isDragging ? `translate(${drag.dx}px, ${drag.dy}px) scale(1.08)` : undefined,
-              transition: isDragging ? "none" : undefined,
+              zIndex: isDragging || isSettling ? 20 : undefined,
+              transform, transition,
               boxShadow: isDragging ? "var(--shadow-3)" : undefined,
             },
           };

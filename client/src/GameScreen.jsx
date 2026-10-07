@@ -118,7 +118,7 @@ export default function GameScreen({ c }) {
   const status = room.finalGraceEndsAt ? { tone: "accent", text: `Last matches ${c.graceLeft}s` }
     : room.dutchCallerId ? { tone: "danger", text: `🔔 ${nameOf(room.dutchCallerId)} · ${room.dutchTurnsLeft ?? 0} left` }
     : phase === "PEEK" ? { tone: "info", text: "Peek" }
-    : room.pendingEffect ? { tone: "info", text: `⚡ ${room.pendingEffect.type.charAt(0) + room.pendingEffect.type.slice(1).toLowerCase()}` }
+    : room.pendingEffect ? { tone: "info", text: `⚡ ${nameOf(room.pendingEffect.actorId)}: ${room.pendingEffect.type.charAt(0) + room.pendingEffect.type.slice(1).toLowerCase()}${(room.effectQueue?.length ?? 0) > 1 ? ` +${room.effectQueue.length - 1}` : ""}` }
     : null;
 
   // ── dock ─────────────────────────────────────────────────────────────────
@@ -207,7 +207,9 @@ export default function GameScreen({ c }) {
       </>
     );
   } else {
-    dockRow = <><div className="dock__text">Waiting for <b>{waitingName}</b>…</div>{matchBtn}</>;
+    dockRow = room.pendingEffect
+      ? <><div className="dock__text">Waiting for <b>{nameOf(room.pendingEffect.actorId)}</b> to use their <b>{room.pendingEffect.type.charAt(0) + room.pendingEffect.type.slice(1).toLowerCase()}</b>…</div>{matchBtn}</>
+      : <><div className="dock__text">Waiting for <b>{waitingName}</b>…</div>{matchBtn}</>;
   }
 
   return (
