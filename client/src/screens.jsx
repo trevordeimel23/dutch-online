@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CardFace } from "./cards.jsx";
 import { Avatar, Btn, Field, GameLengthPicker, Panel, Pill, lengthText } from "./ui.jsx";
 
 // Screens that are allowed to scroll on small phones: landing, lobby and round results.
@@ -146,6 +147,40 @@ export function Lobby({ s, room, players, isHost, onRules }) {
   );
 }
 
+// Spells out how the Dutch call turned out, including any penalty cards the caller had to take
+function DutchOutcome({ result, players, meId }) {
+  const nameOf = (id) => (players.find((p) => p.id === id)?.name ?? "Someone").replace(/^🤖s*/, "");
+  const caller = result.callerId === meId ? "You" : nameOf(result.callerId);
+  const rival = result.lowestOtherId ? nameOf(result.lowestOtherId) : null;
+  let detail;
+  if (result.won) {
+    detail = result.handScore === 0
+      ? "Nothing left in hand (0 points), so it counts as a win. Score for the round: 0."
+      : `Lowest hand at the table (${result.handScore} vs ${result.lowestOtherScore}). Score for the round: 0.`;
+  } else {
+    detail = result.tied
+      ? `${result.handScore} points tied with ${rival}'s ${result.lowestOtherScore}. A tie doesn't win, so two penalty cards were added.`
+      : `${result.handScore} points was beaten by ${rival}'s ${result.lowestOtherScore}, so two penalty cards were added.`;
+  }
+  return (
+    <div className={`outcome outcome--${result.won ? "win" : "lose"}`}>
+      <div className="outcome__title">
+        🔔 {caller} called Dutch — {result.won ? "and won!" : "and did not win"}
+      </div>
+      <div className="outcome__text">{detail}</div>
+      {!result.won && result.penaltyCards.length > 0 && (
+        <div className="outcome__penalty">
+          <span className="outcome__label">Penalty cards</span>
+          <div className="outcome__cards">
+            {result.penaltyCards.map((card, i) => <CardFace key={i} card={card} size="pile" />)}
+          </div>
+          <span className="outcome__label">+{result.penaltyTotal} points</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Results({ s, room, players, totals, dutchCallerId, isHost, isNextDealer, nextDealerName }) {
   const winners = room.gameOver ? (room.winnerIds?.length ? room.winnerIds : [room.winnerId]) : [];
   return (
@@ -162,6 +197,8 @@ export function Results({ s, room, players, totals, dutchCallerId, isHost, isNex
           {!room.gameOver && room.gameLength?.mode === "rounds" && <p>Round {room.roundNumber} of {room.gameLength.rounds}</p>}
           {!room.gameOver && room.gameLength?.mode === "score" && <p>{lengthText(room.gameLength)}</p>}
         </div>
+
+        {room.dutchResult && <DutchOutcome result={room.dutchResult} players={players} meId={s.meId} />}
 
         <Panel>
           <div style={{ overflowX: "auto" }}>
@@ -180,7 +217,12 @@ export function Results({ s, room, players, totals, dutchCallerId, isHost, isNex
                         <b className={isYou ? "score__you" : undefined}>{p.name}</b>{isYou && <span className="score__hand"> (you)</span>}
                       </td>
                       <td className="score__hand">{hand.join("  ")}</td>
-                      <td className="score__num" style={{ color: (room.roundScores?.[p.id] ?? 0) === 0 ? "var(--ok)" : undefined }}>{room.roundScores?.[p.id] ?? 0}</td>
+                      <td className="score__num" style={{ color: (room.roundScores?.[p.id] ?? 0) === 0 ? "var(--ok)" : undefined }}>
+                        {room.roundScores?.[p.id] ?? 0}
+                        {room.dutchResult?.callerId === p.id && !room.dutchResult.won && room.dutchResult.penaltyTotal > 0 && (
+                          <span className="score__hand"> (hand {room.dutchResult.handScore} + {room.dutchResult.penaltyTotal})</span>
+                        )}
+                      </td>
                       <td className="score__num">{totals[p.id] ?? 0}</td>
                     </tr>
                   );

@@ -374,3 +374,13 @@ b { font-weight: 650; }
 .picker__cards { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2) 6px; padding: 14px 0 18px; }
 .picker__sel { text-align: center; color: var(--text-muted); font-size: var(--fs-sm); min-height: 1.4em; }
 .picker__foot { position: sticky; bottom: 0; margin: 0 calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4)); padding: var(--sp-3) var(--sp-4) var(--sp-4); background: var(--surface); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--sp-2); }
+
+/* ── Dutch outcome on the results screen ─────────────────────────────────── */
+.outcome { padding: var(--sp-4); border-radius: var(--r-lg); border: 1px solid var(--border-strong); background: var(--surface); text-align: center; display: flex; flex-direction: column; gap: var(--sp-2); }
+.outcome--win { border-color: var(--ok); background: var(--ok-soft); }
+.outcome--lose { border-color: var(--danger); background: var(--danger-soft); }
+.outcome__title { font-size: var(--fs-lg); font-weight: 750; }
+.outcome__text { color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.5; }
+.outcome__penalty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); margin-top: var(--sp-1); }
+.outcome__label { font-size: var(--fs-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); font-weight: 650; }
+.outcome__cards { display: flex; gap: var(--sp-3); justify-content: center; }

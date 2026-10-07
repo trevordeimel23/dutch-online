@@ -159,13 +159,19 @@ function scoreRound(room, roomId) {
   }
 
   const callerId = g.dutchCallerId;
+  g.dutchResult = null;
   if (callerId) {
     const callerScore = scores[callerId];
-    const otherScores = Object.entries(scores)
-      .filter(([id]) => id !== callerId)
-      .map(([, s]) => s);
-    const minOtherScore = otherScores.length ? Math.min(...otherScores) : Infinity;
+    const others = Object.entries(scores).filter(([id]) => id !== callerId);
+    const minOtherScore = others.length ? Math.min(...others.map(([, s]) => s)) : Infinity;
+    const bestOtherId = others.find(([, s]) => s === minOtherScore)?.[0] ?? null;
     const callerWins = callerScore < minOtherScore || callerScore === 0;
+    g.dutchResult = {
+      callerId, won: callerWins, handScore: callerScore,
+      lowestOtherId: bestOtherId, lowestOtherScore: Number.isFinite(minOtherScore) ? minOtherScore : null,
+      tied: !callerWins && callerScore === minOtherScore,
+      penaltyCards: [], penaltyTotal: 0,
+    };
 
     if (callerWins) {
       scores[callerId] = 0;
@@ -182,6 +188,8 @@ function scoreRound(room, roomId) {
         }
       }
       scores[callerId] += penaltyTotal;
+      g.dutchResult.penaltyCards = penaltyCards;
+      g.dutchResult.penaltyTotal = penaltyTotal;
       const name = room.players.find((p) => p.id === callerId)?.name ?? "Caller";
       io.to(roomId).emit("log", `${name} called Dutch but didn't have the lowest — penalty +${penaltyTotal} pts (${penaltyCards.join(", ")})`);
     }
@@ -315,6 +323,7 @@ function publicRoomView(room) {
     base.gameOver = g.gameOver ?? false;
     base.winnerId = g.winnerId ?? null;
     base.winnerIds = g.winnerIds ?? [];
+    base.dutchResult = g.dutchResult ?? null;
   }
 
   return base;

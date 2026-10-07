@@ -66,6 +66,8 @@ export default function App() {
   const [peekTimeLeft, setPeekTimeLeft] = useState(0);
   const expiryRef    = useRef({});
   const seenCardsRef = useRef(new Set());
+  const phaseRef     = useRef("LOBBY");
+  const roundRef     = useRef(0);
   const tickRef      = useRef(null);
 
   // Highlights from table events: "playerId:slot" -> kind (swap | moved | jack | queen | penalty | fail)
@@ -139,11 +141,21 @@ export default function App() {
 
     const onRoomUpdate = (data) => {
       setRoom(data);
-      if (data?.phase === "SCORING" || data?.phase === "LOBBY") {
+      phaseRef.current = data?.phase ?? "LOBBY";
+      // A new round (or leaving a game) starts with a clean slate: nothing is "already seen" and no stale peek picks.
+      const roundKey = data?.roundNumber ?? 0;
+      const newRound = roundKey !== roundRef.current;
+      roundRef.current = roundKey;
+      if (newRound || data?.phase === "SCORING" || data?.phase === "LOBBY") {
         seenCardsRef.current.clear();
         expiryRef.current = {};
         setVisibleCards({});
         setPeekTimeLeft(0);
+      }
+      if (newRound) {
+        setPeekPick([]);
+        setMatchIndex(0);
+        setQueenReveal(null);
       }
       if (data?.players?.length > 0) {
         const firstId = data.players[0].id;
@@ -161,7 +173,9 @@ export default function App() {
         clearTimeout(queenRevealTimerRef.current);
         queenRevealTimerRef.current = setTimeout(() => setQueenReveal(null), 20000);
       }
-      const knownCards = new Set(Object.values(data?.known ?? {}));
+      // Between rounds the server still lists last round's known cards; ignore them so they can't be mistaken for new ones
+      const idle = phaseRef.current === "SCORING" || phaseRef.current === "LOBBY";
+      const knownCards = new Set(idle ? [] : Object.values(data?.known ?? {}));
 
       for (const card of Object.keys(expiryRef.current)) {
         if (!knownCards.has(card)) delete expiryRef.current[card];

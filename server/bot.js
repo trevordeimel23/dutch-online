@@ -24,6 +24,16 @@ const DISCARD_PICKUP_MEMORY = 0.7; // chance of remembering the right slot for a
 const AVG_UNKNOWN_VALUE = 6.5;     // expected value of a card you haven't seen
 
 const rnd = (a, b) => a + Math.random() * (b - a);
+
+// How many cards a computer dealer lets everyone peek at: 0 (10%), 1 (20%), 2 (40%), 3 (20%), 4 (10%)
+function pickLookCount() {
+  const roll = Math.random();
+  if (roll < 0.1) return 0;
+  if (roll < 0.3) return 1;
+  if (roll < 0.7) return 2;
+  if (roll < 0.9) return 3;
+  return 4;
+}
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 function rankOf(card) { return card.slice(0, -1); }
@@ -242,7 +252,7 @@ class Bot {
 
     if (phase === "SCORING") {
       if (!room.gameOver && room.nextDealerId === this.id) {
-        return { key: "newRound", delay: this.wait(5000, 7000), run: () => this.emit("game:newRound", { lookCount: 2 }) };
+        return { key: "newRound", delay: this.wait(5000, 7000), run: () => this.emit("game:newRound", { lookCount: pickLookCount() }) };
       }
       return null;
     }
@@ -622,4 +632,4 @@ class Bot {
   }
 }
 
-module.exports = { Bot, BOT_NAMES, SPEED_MULTIPLIER, DIFFICULTY };
+module.exports = { Bot, BOT_NAMES, SPEED_MULTIPLIER, DIFFICULTY, pickLookCount };
