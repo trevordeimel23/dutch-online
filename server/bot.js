@@ -36,10 +36,15 @@ function cardValue(card) {
   if (rank === "K") return (suitOf(card) === "H" || suitOf(card) === "D") ? 0 : 13;
   return parseInt(rank, 10);
 }
+const SUIT_SYMBOL = { S: "♠", H: "♥", D: "♦", C: "♣" };
+const label = (card) => `${rankOf(card)}${SUIT_SYMBOL[suitOf(card)] ?? suitOf(card)}`;
 const isBlackKing = (card) => rankOf(card) === "K" && (suitOf(card) === "S" || suitOf(card) === "C");
 
 class Bot {
-  constructor({ url, roomId, name, secret, settings }) {
+  // offline: no socket — used by the tutorial coach, which is fed the human player's views by the server
+  constructor({ url, roomId, name, secret, settings, offline, playerId }) {
+    this.offline = !!offline;
+    this.fakeId = playerId;
     this.settings = settings || { speed: "fast", difficulty: "hard" };
     this.roomId = roomId;
     this.name = name;
@@ -54,6 +59,7 @@ class Bot {
     this.lockUntil = 0;
     this.stopped = false;
 
+    if (this.offline) return;
     this.socket = io(url, { transports: ["websocket"], reconnection: false });
     this.socket.on("connect", () => {
       this.socket.emit("room:join", { roomId, name, botSecret: secret });
@@ -71,10 +77,10 @@ class Bot {
   stop() {
     this.stopped = true;
     clearTimeout(this.timer);
-    this.socket.disconnect();
+    if (this.socket) this.socket.disconnect();
   }
 
-  get id() { return this.socket.id; }
+  get id() { return this.offline ? this.fakeId : this.socket.id; }
 
   wait(min, max) { return rnd(min, max) * SPEED * (SPEED_MULTIPLIER[this.settings.speed] ?? 1); }
   get difficulty() { return DIFFICULTY[this.settings.difficulty] ?? DIFFICULTY.hard; }
@@ -182,7 +188,11 @@ class Bot {
   // ── what the bot knows about its own hand ─────────────────────────────────
 
   get handSize() { return this.me?.handSize ?? 0; }
-  known() { return this.me?.known ?? {}; }
+  // In tutorial "show all my cards" mode the coach knows the whole hand, like the player does
+  known() {
+    if (this.me?.fullHand) return Object.fromEntries(this.me.fullHand.map((c, i) => [i, c]));
+    return this.me?.known ?? {};
+  }
   unknownSlots() {
     const k = this.known();
     return [...Array(this.handSize).keys()].filter((i) => k[i] === undefined);
@@ -196,7 +206,7 @@ class Bot {
   // ── scheduling ────────────────────────────────────────────────────────────
 
   schedule() {
-    if (this.stopped || this.timer) return;
+    if (this.offline || this.stopped || this.timer) return;
     if (!this.room || !this.me) return;
     const now = Date.now();
     const act = this.decide();
@@ -317,18 +327,26 @@ class Bot {
 
   // ── drawing and placing ───────────────────────────────────────────────────
 
-  doDraw() {
+  // Each plan*() returns what to do plus a plain-English reason. Bots act on the plan; the tutorial coach shows the reason.
+
+  planDraw() {
     const top = this.room.discardTop;
-    let takeDiscard = false;
-    if (top && !isBlackKing(top)) {
-      const v = cardValue(top);
-      const k = this.known();
-      const worst = this.knownSlots().reduce((m, i) => Math.max(m, cardValue(k[i])), -Infinity);
-      const gainKnown = worst - v;
-      const gainUnknown = this.unknownSlots().length ? AVG_UNKNOWN_VALUE + 1.5 - v : -Infinity;
-      if (v <= 1 || gainKnown >= 3 || gainUnknown >= 3) takeDiscard = true;
-    }
-    this.emit("turn:draw", { source: takeDiscard ? "DISCARD" : "DECK" });
+    if (!top) return { source: "DECK", reason: "The discard pile is empty, so draw from the deck." };
+    if (isBlackKing(top)) return { source: "DECK", reason: `Never take a black king (${label(top)}) — it's worth 13 points, the worst card. Draw from the deck instead.` };
+    const v = cardValue(top);
+    const k = this.known();
+    const knownSlots = this.knownSlots();
+    let worstSlot = null;
+    for (const i of knownSlots) if (worstSlot === null || cardValue(k[i]) > cardValue(k[worstSlot])) worstSlot = i;
+    const worst = worstSlot === null ? -Infinity : cardValue(k[worstSlot]);
+    const gainKnown = worst - v;
+    const hasUnknown = this.unknownSlots().length > 0;
+    const gainUnknown = hasUnknown ? AVG_UNKNOWN_VALUE + 1.5 - v : -Infinity;
+
+    if (v <= 1) return { source: "DISCARD", reason: `The ${label(top)} on the discard pile is worth only ${v} point${v === 1 ? "" : "s"} — take it!` };
+    if (gainKnown >= 3) return { source: "DISCARD", reason: `Take the ${label(top)} (${v}): you can swap it for your card #${worstSlot} (${label(k[worstSlot])}, ${worst}) and save ${gainKnown} points.` };
+    if (gainUnknown >= 3) return { source: "DISCARD", reason: `Take the ${label(top)} (${v}): an unseen card averages about 6.5, so swapping it in should lower your score — and you'll learn what you were holding.` };
+    return { source: "DECK", reason: `The ${label(top)} on the discard pile (${v}) wouldn't improve your hand much, so draw from the deck.` };
   }
 
   // Best slot for a card: highest improvement; unknown slots count as an average card plus a bonus for learning it
@@ -343,42 +361,78 @@ class Bot {
     return best;
   }
 
-  doPlace() {
+  planPlace() {
     const pd = this.me.pendingDraw;
-    if (!pd) return;
-    const best = this.bestSlotFor(pd.card);
+    if (!pd) return null;
+    const card = pd.card;
+    const v = cardValue(card);
     const fromDiscard = pd.source === "DISCARD";
-    if (!best) { if (!fromDiscard) this.emit("turn:discard-drawn", {}); return; }
+    const best = this.bestSlotFor(card);
+    const power = { J: "Jack", Q: "Queen", A: "Ace" }[rankOf(card)];
 
-    if (isBlackKing(pd.card) && !fromDiscard) { this.emit("turn:discard-drawn", {}); return; }
-    if (fromDiscard || best.gain > 0) this.emit("turn:swap", { index: best.index });
-    else this.emit("turn:discard-drawn", {});
+    if (!best) return { kind: "discard", reason: "Discard it." };
+    if (isBlackKing(card) && !fromDiscard) {
+      return { kind: "discard", reason: `${label(card)} is a black king — worth 13 points, the worst card. Discard it right away.` };
+    }
+    if (fromDiscard || best.gain > 0) {
+      const k = this.known();
+      const slot = best.index;
+      const reason = k[slot] !== undefined
+        ? `Swap it with your card #${slot} (${label(k[slot])}, ${cardValue(k[slot])} points) — that saves ${cardValue(k[slot]) - v} points.`
+        : `Swap it with your unknown card #${slot}. Your ${label(card)} (${v}) is probably lower than an unseen card (about 6.5 on average), and the card you replace is shown on the pile so you learn what it was.`;
+      return { kind: "swap", index: slot, reason: fromDiscard ? `You took it from the discard pile, so it must go into your hand. ${reason}` : reason };
+    }
+    return {
+      kind: "discard",
+      reason: `${label(card)} (${v}) isn't better than what you have, so discard it.${power ? ` Bonus: discarding a ${power} lets you use its power!` : ""}`,
+    };
   }
 
   // ── Dutch ─────────────────────────────────────────────────────────────────
+
+  planWindow() {
+    const d = this.dutchCheck();
+    return { dutch: d.call, reason: d.reason };
+  }
+
+  dutchCheck() {
+    const unknown = this.unknownSlots();
+    if (unknown.length > 0) {
+      return { call: false, reason: `You don't know all your cards yet (card${unknown.length > 1 ? "s" : ""} ${unknown.map((i) => "#" + i).join(", ")} unknown), so calling Dutch is too risky. Pass.` };
+    }
+    const score = this.knownSum();
+    const others = this.room.players.filter((p) => p.id !== this.id);
+    const size = (p) => this.room.handSizes?.[p.id] ?? 4;
+
+    if (score <= 1) {
+      const someoneEmpty = others.some((p) => size(p) === 0);
+      const someoneLow = others.some((p) => {
+        const b = this.beliefs[p.id] || {};
+        const slots = [...Array(size(p)).keys()];
+        return size(p) > 0 && slots.every((i) => b[i] !== undefined && cardValue(b[i]) <= 1);
+      });
+      if (!someoneEmpty && !someoneLow) return { call: true, reason: `You know every card and your total is only ${score} — call Dutch!` };
+    }
+    if (score <= 4 && others.every((p) => size(p) >= 3)) {
+      return { call: true, reason: `You know every card, your total is just ${score}, and everyone else still has 3+ cards — call Dutch!` };
+    }
+    return { call: false, reason: score > 4 ? `Your known total is ${score} — too high to risk Dutch (if anyone beats or ties you, you take 2 penalty cards). Pass.` : "Someone else could have an equal or lower score, so calling Dutch is risky. Pass." };
+  }
+
+  shouldCallDutch() { return this.dutchCheck().call; }
 
   doWindow() {
     if (!this.room.dutchCallerId && this.shouldCallDutch()) this.emit("dutch:call", {});
     else this.emit("turn:end", {});
   }
 
-  shouldCallDutch() {
-    if (this.unknownSlots().length > 0) return false; // only when it knows its hand for sure
-    const score = this.knownSum();
-    const others = this.room.players.filter((p) => p.id !== this.id);
+  doDraw() { this.emit("turn:draw", { source: this.planDraw().source }); }
 
-    if (score <= 1) {
-      const someoneEmpty = others.some((p) => (this.room.handSizes?.[p.id] ?? 4) === 0);
-      const someoneLow = others.some((p) => {
-        const size = this.room.handSizes?.[p.id] ?? 4;
-        const b = this.beliefs[p.id] || {};
-        const slots = [...Array(size).keys()];
-        return size > 0 && slots.every((i) => b[i] !== undefined && cardValue(b[i]) <= 1);
-      });
-      if (!someoneEmpty && !someoneLow) return true;
-    }
-    if (score <= 4 && others.every((p) => (this.room.handSizes?.[p.id] ?? 4) >= 3)) return true;
-    return false;
+  doPlace() {
+    const plan = this.planPlace();
+    if (!plan) return;
+    if (plan.kind === "swap") this.emit("turn:swap", { index: plan.index });
+    else this.emit("turn:discard-drawn", {});
   }
 
   // ── special powers ────────────────────────────────────────────────────────
@@ -388,15 +442,24 @@ class Bot {
     return this.room.players.filter((p) => p.id !== this.id && p.id !== this.room.dutchCallerId);
   }
 
-  doEffect(type) {
-    if (type === "ACE") return this.doAce();
-    if (type === "JACK") return this.doJack();
-    return this.doQueen();
+  nameOf(pid) { return this.room.players.find((p) => p.id === pid)?.name ?? "someone"; }
+
+  planEffect(type) {
+    if (type === "ACE") return this.planAce();
+    if (type === "JACK") return this.planJack();
+    return this.planQueen();
   }
 
-  doAce() {
+  doEffect(type) {
+    const plan = this.planEffect(type);
+    if (type === "ACE") this.emit("effect:ace", { targetPlayerId: plan.targetPlayerId });
+    else if (type === "JACK") this.emit("effect:jack", { a: plan.a, b: plan.b });
+    else this.emit("effect:queen", { targetPlayerId: plan.targetPlayerId, targetIndex: plan.targetIndex });
+  }
+
+  planAce() {
     const cands = this.targets();
-    if (!cands.length) { this.emit("effect:ace", { targetPlayerId: this.id }); return; }
+    if (!cands.length) return { targetPlayerId: this.id, reason: "Nobody else can be targeted." };
     const totals = this.room.totals || {};
     const total = (p) => totals[p.id] ?? 0;
     const lowest = Math.min(...cands.map(total));
@@ -404,10 +467,13 @@ class Bot {
     const size = (p) => this.room.handSizes?.[p.id] ?? 4;
     const fewest = Math.min(...close.map(size));
     const target = pick(close.filter((p) => size(p) === fewest));
-    this.emit("effect:ace", { targetPlayerId: target.id });
+    const why = close.length > 1
+      ? `${target.name} has the fewest cards (${size(target)}) among the players with the lowest scores`
+      : `${target.name} has the lowest overall score (${total(target)})`;
+    return { targetPlayerId: target.id, reason: `Give the Ace's penalty card to ${target.name}: ${why}. Slow down the leader!` };
   }
 
-  doJack() {
+  planJack() {
     const k = this.known();
     const ownSlots = this.knownSlots();
     const cands = this.targets();
@@ -421,12 +487,14 @@ class Bot {
         for (const [slot, card] of Object.entries(this.beliefs[p.id] || {})) {
           if (Number(slot) >= (this.room.handSizes?.[p.id] ?? 4)) continue;
           const gain = worstVal - cardValue(card);
-          if (gain >= 6 && (!bestTrade || gain > bestTrade.gain)) bestTrade = { pid: p.id, slot: Number(slot), gain };
+          if (gain >= 6 && (!bestTrade || gain > bestTrade.gain)) bestTrade = { pid: p.id, slot: Number(slot), gain, card };
         }
       }
       if (bestTrade) {
-        this.emit("effect:jack", { a: { playerId: this.id, index: worstSlot }, b: { playerId: bestTrade.pid, index: bestTrade.slot } });
-        return;
+        return {
+          a: { playerId: this.id, index: worstSlot }, b: { playerId: bestTrade.pid, index: bestTrade.slot },
+          reason: `Swap your card #${worstSlot} (${label(k[worstSlot])}, ${worstVal}) with ${this.nameOf(bestTrade.pid)}'s card #${bestTrade.slot}, which you saw was a ${label(bestTrade.card)} (${cardValue(bestTrade.card)}) — a big improvement.`,
+        };
       }
     }
 
@@ -435,10 +503,11 @@ class Bot {
     const ranked = [...cands].sort((x, y) => (totals[x.id] ?? 0) - (totals[y.id] ?? 0));
     const sizeOf = (p) => this.room.handSizes?.[p.id] ?? 4;
     const withCards = ranked.filter((p) => sizeOf(p) > 0);
+    const why = "You don't know of a good trade, so scramble the leaders: anything they memorized about these cards is now wrong.";
     if (withCards.length >= 2) {
       const [p1, p2] = withCards;
-      this.emit("effect:jack", { a: { playerId: p1.id, index: Math.floor(Math.random() * sizeOf(p1)) }, b: { playerId: p2.id, index: Math.floor(Math.random() * sizeOf(p2)) } });
-      return;
+      const i1 = Math.floor(Math.random() * sizeOf(p1)), i2 = Math.floor(Math.random() * sizeOf(p2));
+      return { a: { playerId: p1.id, index: i1 }, b: { playerId: p2.id, index: i2 }, reason: `Swap ${p1.name}'s card #${i1} with ${p2.name}'s card #${i2}. ${why}` };
     }
     if (withCards.length === 1 && sizeOf(withCards[0]) >= 2) {
       const p = withCards[0];
@@ -446,28 +515,111 @@ class Bot {
       const a = Math.floor(Math.random() * n);
       let b = Math.floor(Math.random() * (n - 1));
       if (b >= a) b += 1;
-      this.emit("effect:jack", { a: { playerId: p.id, index: a }, b: { playerId: p.id, index: b } });
-      return;
+      return { a: { playerId: p.id, index: a }, b: { playerId: p.id, index: b }, reason: `Swap two of ${p.name}'s cards (#${a} and #${b}). ${why}` };
     }
     // Nothing sensible to do: swap two of my own cards
     const n = Math.max(this.handSize, 1);
-    this.emit("effect:jack", { a: { playerId: this.id, index: 0 }, b: { playerId: this.id, index: Math.min(1, n - 1) } });
+    return { a: { playerId: this.id, index: 0 }, b: { playerId: this.id, index: Math.min(1, n - 1) }, reason: "There's nobody useful to target — swap two of your own cards." };
   }
 
-  doQueen() {
+  planQueen() {
     const unknown = this.unknownSlots();
     if (unknown.length) {
-      this.emit("effect:queen", { targetPlayerId: this.id, targetIndex: pick(unknown) });
-      return;
+      const slot = pick(unknown);
+      return { targetPlayerId: this.id, targetIndex: slot, reason: `Peek at your own unknown card #${slot} — knowing your hand is how you lower your score.` };
     }
     // Know everything I own: look at someone else's card, usually whoever has the fewest cards
     const cands = this.targets().filter((p) => (this.room.handSizes?.[p.id] ?? 4) > 0);
-    if (!cands.length) { this.emit("effect:queen", { targetPlayerId: this.id, targetIndex: 0 }); return; }
+    if (!cands.length) return { targetPlayerId: this.id, targetIndex: 0, reason: "Peek at one of your own cards." };
     const size = (p) => this.room.handSizes?.[p.id] ?? 4;
     const fewest = Math.min(...cands.map(size));
     const pool = Math.random() < 0.8 ? cands.filter((p) => size(p) === fewest) : cands;
     const target = pick(pool);
-    this.emit("effect:queen", { targetPlayerId: target.id, targetIndex: Math.floor(Math.random() * size(target)) });
+    const slot = Math.floor(Math.random() * size(target));
+    return { targetPlayerId: target.id, targetIndex: slot, reason: `You know all your own cards, so spy on ${target.name}'s card #${slot} — they have few cards, so each one matters.` };
+  }
+
+  // ── tutorial coach ────────────────────────────────────────────────────────
+  // Used offline (no socket) on behalf of the human player: turns the same planning code into advice.
+
+  matchTip() {
+    const room = this.room, me = this.me;
+    if (!room || !me || room.phase !== "PLAY" || !room.discardTop || room.revealHold) return null;
+    const top = room.discardTop;
+    const k = this.known();
+    const slots = this.knownSlots().filter((i) => rankOf(k[i]) === rankOf(top));
+    if (slots.length) {
+      return {
+        match: slots[0],
+        text: `✋ You can match! The discard pile shows ${label(top)} and your card #${slots[0]} is ${label(k[slots[0]])} — same rank. Select card #${slots[0]} and press Match. You get rid of that card without drawing one.`,
+      };
+    }
+    return {
+      match: null,
+      text: `✋ Don't match the ${label(top)}: none of your cards that you know about has that rank. A wrong guess costs you a penalty card.`,
+    };
+  }
+
+  advice() {
+    const room = this.room, me = this.me;
+    if (!room || !me) return null;
+    const key = JSON.stringify([
+      room.phase, room.turnPlayerId, me.pendingDraw, room.dutchWindowPlayerId, room.pendingEffect, me.matchEffect,
+      room.discardTop, this.discardVersion, me.handSize, me.known, me.hasPeeked, room.finalGraceEndsAt, room.revealHold,
+      room.dutchCallerId, room.handSizes,
+    ]);
+    if (this._adviceCache?.key === key) return this._adviceCache.advice;
+    const advice = this.computeAdvice();
+    this._adviceCache = { key, advice };
+    return advice;
+  }
+
+  computeAdvice() {
+    const room = this.room, me = this.me;
+    const tip = this.matchTip();
+    const base = { tip: tip?.text ?? null, matchIndex: tip?.match ?? null };
+
+    if (room.phase === "PEEK") {
+      if (!me.hasPeeked && room.lookCount > 0) {
+        return { ...base, tip: null, headline: "Peek phase", text: `Pick ${room.lookCount} of your 4 cards to look at, then memorize them — you can't look again later. Knowing your cards is the key to a low score. (You can also drag your cards to rearrange them first.)`, action: { type: "peek" } };
+      }
+      return { ...base, tip: null, headline: "Peek phase", text: "Waiting for the other players to finish peeking.", action: null };
+    }
+    if (room.phase !== "PLAY") return null;
+
+    if (room.finalGraceEndsAt) {
+      return { ...base, headline: "Last chance!", text: "Everyone has had their final turn. For a few seconds you can still match the discard pile if you know a card of the same rank.", action: null };
+    }
+    if (room.revealHold === this.id) {
+      return { ...base, tip: null, headline: "Take a look", text: "You peeked with your Queen on the last turn. Press Done when you've seen it.", action: null };
+    }
+
+    const effect = this.pendingEffectType();
+    if (effect) {
+      const plan = this.planEffect(effect);
+      const names = { ACE: "Ace", JACK: "Jack", QUEEN: "Queen" };
+      const action = effect === "ACE" ? { type: "ace", targetPlayerId: plan.targetPlayerId }
+        : effect === "JACK" ? { type: "jack", a: plan.a, b: plan.b }
+        : { type: "queen", targetPlayerId: plan.targetPlayerId, targetIndex: plan.targetIndex };
+      return { ...base, headline: `Use your ${names[effect]}!`, text: plan.reason, action };
+    }
+
+    if (room.turnPlayerId === this.id) {
+      if (me.pendingDraw) {
+        const plan = this.planPlace();
+        const action = plan.kind === "swap" ? { type: "swap", index: plan.index } : { type: "discard" };
+        return { ...base, headline: `You drew ${label(me.pendingDraw.card)}`, text: plan.reason, action };
+      }
+      if (room.dutchWindowPlayerId === this.id) {
+        const plan = this.planWindow();
+        return { ...base, headline: plan.dutch ? "Call Dutch?" : "Pass your turn", text: plan.reason, action: { type: plan.dutch ? "dutch" : "pass" } };
+      }
+      const plan = this.planDraw();
+      return { ...base, headline: "Your turn: draw a card", text: plan.reason + " Every turn you must draw one card and then discard one.", action: { type: "draw", source: plan.source } };
+    }
+
+    const who = room.players.find((p) => p.id === room.turnPlayerId)?.name;
+    return { ...base, headline: who ? `${who} is playing` : "Waiting…", text: "Watch what gets discarded and picked up. You can match the discard pile at any time, even on someone else's turn.", action: null };
   }
 }
 

@@ -50,6 +50,7 @@ const HIGHLIGHTS = {
   queen:   { color: "#64b5f6", tag: "peeked" },
   penalty: { color: "#ef5350", tag: "penalty" },
   pick:    { color: "#ffffff", tag: "" },
+  hint:    { color: "#69f0ae", tag: "try this" },
 };
 
 const SIZES = {

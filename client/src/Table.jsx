@@ -5,7 +5,7 @@ import { CardBack, CardFace, useIsMobile } from "./cards.jsx";
 // Everyone's cards stay in their slots; when someone places, swaps, matches or rearranges a card,
 // the affected slot is highlighted for a few seconds.
 
-function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, onClick, small }) {
+function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, isHint, onClick, small }) {
   return (
     <div
       onClick={onClick}
@@ -13,7 +13,7 @@ function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, 
         display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, flexWrap: "wrap",
         marginBottom: small ? 4 : 8, padding: small ? "2px 6px" : "3px 10px", borderRadius: 14, fontSize: small ? 11 : 13,
         background: isTurn ? "rgba(255,215,0,0.25)" : "rgba(0,0,0,0.35)",
-        border: isTarget ? "2px solid #ffffff" : isTurn ? "1px solid rgba(255,215,0,0.7)" : "1px solid rgba(255,255,255,0.12)",
+        border: isHint ? "2px solid #69f0ae" : isTarget ? "2px solid #ffffff" : isTurn ? "1px solid rgba(255,215,0,0.7)" : "1px solid rgba(255,255,255,0.12)",
         cursor: onClick ? "pointer" : "default",
         color: isMe ? "#ffd700" : "#e8d5a3",
       }}
@@ -33,7 +33,7 @@ function SeatHeader({ player, isMe, isTurn, total, reorders, isDutch, isTarget, 
   );
 }
 
-function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCardClick, onSeatClick, isAceTarget }) {
+function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCardClick, onSeatClick, isAceTarget, isHint }) {
   const count = room.handSizes?.[player.id] ?? 0;
   const held = room.drawn?.playerId === player.id ? room.drawn : null;
   const clickable = targetMode === "JACK" || targetMode === "QUEEN";
@@ -47,6 +47,7 @@ function OpponentSeat({ player, room, size, highlights, marks, targetMode, onCar
         reorders={room.reorders?.[player.id]}
         isDutch={player.id === room.dutchCallerId}
         isTarget={isAceTarget}
+        isHint={isHint}
         onClick={targetMode === "ACE" ? () => onSeatClick(player.id) : undefined}
       />
       <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", paddingTop: 18 }}>
@@ -275,6 +276,7 @@ export default function Table(props) {
     player: p, room, size: oppSize, highlights, marks, targetMode,
     onCardClick: props.onCardClick, onSeatClick: props.onSeatClick,
     isAceTarget: targetMode === "ACE" && aceTarget === p.id,
+    isHint: !!props.hintSeatId && props.hintSeatId === p.id,
   });
 
   const mySeat = meP && (

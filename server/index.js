@@ -59,6 +59,21 @@ function cardValue(card) {
   return parseInt(rank);
 }
 
+// How long a game lasts: a fixed number of rounds (1–20), or until someone reaches a target score
+const SCORE_TARGETS = [25, 50, 75, 100];
+const DEFAULT_GAME_LENGTH = { mode: "score", target: 100 };
+
+function cleanGameLength(input) {
+  if (input?.mode === "rounds") {
+    const rounds = Math.floor(Number(input.rounds));
+    if (rounds >= 1 && rounds <= 20) return { mode: "rounds", rounds };
+  } else if (input?.mode === "score") {
+    const target = Number(input.target);
+    if (SCORE_TARGETS.includes(target)) return { mode: "score", target };
+  }
+  return null;
+}
+
 function getRoomOrThrow(roomId) {
   const room = rooms.get(roomId);
   if (!room) throw new Error("Room not found");
@@ -177,12 +192,19 @@ function scoreRound(room, roomId) {
     room.totals[p.id] = (room.totals[p.id] ?? 0) + scores[p.id];
   }
 
-  const gameOver = Object.values(room.totals).some((t) => t >= 100);
+  const length = room.gameLength ?? DEFAULT_GAME_LENGTH;
+  const gameOver = length.mode === "rounds"
+    ? (room.roundNumber ?? 1) >= length.rounds
+    : Object.values(room.totals).some((t) => t >= length.target);
   let winnerId = null;
+  let winnerIds = [];
   if (gameOver) {
-    winnerId = Object.entries(room.totals).sort((a, b) => a[1] - b[1])[0][0];
-    const winnerName = room.players.find((p) => p.id === winnerId)?.name ?? "Someone";
-    io.to(roomId).emit("log", `Game over! ${winnerName} wins!`);
+    // The lowest total wins (a tie is shared)
+    const lowest = Math.min(...room.players.map((p) => room.totals[p.id] ?? 0));
+    winnerIds = room.players.filter((p) => (room.totals[p.id] ?? 0) === lowest).map((p) => p.id);
+    winnerId = winnerIds[0] ?? null;
+    const names = winnerIds.map((id) => room.players.find((p) => p.id === id)?.name ?? "Someone");
+    io.to(roomId).emit("log", names.length > 1 ? `Game over! It's a tie between ${names.join(" and ")}.` : `Game over! ${names[0]} wins!`);
   }
 
   g.phase = "SCORING";
@@ -190,6 +212,7 @@ function scoreRound(room, roomId) {
   g.revealedHands = revealedHands;
   g.gameOver = gameOver;
   g.winnerId = winnerId;
+  g.winnerIds = winnerIds;
 }
 
 const FINAL_GRACE_MS = 10000;
@@ -252,6 +275,7 @@ function publicDrawnCard(g) {
 // Public, card-free description of what just happened at the table (drives highlights on every client)
 function emitTable(roomId, event) {
   io.to(roomId).emit("table:event", event);
+  rooms.get(roomId)?.coach?.onTableEvent(event);
 }
 
 function publicRoomView(room) {
@@ -268,6 +292,9 @@ function publicRoomView(room) {
     pendingEffect: g?.pendingEffect ?? null,
     revealHold: g?.revealHold ?? null,
     finalGraceEndsAt: g?.finalGraceEndsAt ?? null,
+    gameLength: room.gameLength ?? DEFAULT_GAME_LENGTH,
+    roundNumber: room.roundNumber ?? 0,
+    tutorial: room.tutorial ?? null,
     botSettings: room.botSettings ?? null,
     expectedPlayers: room.expectedPlayers ?? null, // set in play-vs-computer rooms until all bots have joined
     handSizes: Object.fromEntries(room.players.map((p) => [p.id, g?.hands?.get(p.id)?.length ?? 0])),
@@ -285,6 +312,7 @@ function publicRoomView(room) {
     base.revealedHands = g.revealedHands ?? {};
     base.gameOver = g.gameOver ?? false;
     base.winnerId = g.winnerId ?? null;
+    base.winnerIds = g.winnerIds ?? [];
   }
 
   return base;
@@ -292,7 +320,10 @@ function publicRoomView(room) {
 
 function privateViewFor(room, playerId) {
   const g = room.game;
+  const showAll = room.tutorial?.showAllCards && playerId === room.tutorialHumanId;
   return {
+    // Tutorial "show all my cards" mode: the player's whole hand, always visible
+    fullHand: showAll ? [...(g?.hands?.get(playerId) ?? [])] : undefined,
     handSize: g?.hands?.get(playerId)?.length ?? 0,
     known: g?.known?.get(playerId) ?? {},
     hasPeeked: g?.hasPeeked?.has(playerId) ?? false,
@@ -309,6 +340,12 @@ function broadcastRoom(roomId) {
   io.to(roomId).emit("room:update", publicRoomView(room));
   for (const p of room.players) {
     io.to(p.id).emit("me:update", privateViewFor(room, p.id));
+  }
+  // Tutorial: a coach (running the computer players' decision code on the human's own view) advises the player
+  if (room.tutorial && room.coach && room.tutorialHumanId) {
+    room.coach.onRoom(publicRoomView(room));
+    room.coach.onMe(privateViewFor(room, room.tutorialHumanId));
+    io.to(room.tutorialHumanId).emit("coach:advice", room.coach.advice());
   }
   if (room.game?.peekRevealFor) room.game.peekRevealFor = {};
 }
@@ -412,6 +449,14 @@ io.on("connection", (socket) => {
   });
 
   // Start a private room against 2–9 computer players
+  // Tutorial: toggle seeing all your own cards
+  socket.on("room:tutorialSettings", ({ roomId, showAllCards }) => {
+    const room = rooms.get(roomId);
+    if (!room?.tutorial || room.tutorialHumanId !== socket.id) return;
+    room.tutorial.showAllCards = !!showAllCards;
+    broadcastRoom(roomId);
+  });
+
   // Host can change the computer players' speed / difficulty at any time (the bots read the same object)
   socket.on("room:botSettings", ({ roomId, speed, difficulty }) => {
     const room = rooms.get(roomId);
@@ -421,14 +466,21 @@ io.on("connection", (socket) => {
     broadcastRoom(roomId);
   });
 
-  socket.on("room:playBots", ({ name, botCount, speed, difficulty }) => {
+  socket.on("room:playBots", ({ name, botCount, speed, difficulty, gameLength, tutorial, showAllCards }) => {
     if (!name) return;
-    const n = Math.min(9, Math.max(2, Math.floor(Number(botCount)) || 3));
+    const minBots = tutorial ? 1 : 2;
+    const n = Math.min(tutorial ? 3 : 9, Math.max(minBots, Math.floor(Number(botCount)) || (tutorial ? 1 : 3)));
     let roomId;
     do { roomId = "BOT-" + crypto.randomBytes(2).toString("hex").toUpperCase(); } while (rooms.has(roomId));
     joinRoom(roomId, name, false);
     const room = rooms.get(roomId);
     room.expectedPlayers = n + 1;
+    room.gameLength = cleanGameLength(gameLength) ?? DEFAULT_GAME_LENGTH;
+    if (tutorial) {
+      room.tutorial = { showAllCards: !!showAllCards };
+      room.tutorialHumanId = socket.id;
+      room.coach = new Bot({ offline: true, playerId: socket.id, roomId, name });
+    }
     room.botSettings = {
       speed: Object.hasOwn(SPEED_MULTIPLIER, speed) ? speed : "normal",
       difficulty: Object.hasOwn(DIFFICULTY, difficulty) ? difficulty : "medium",
@@ -446,7 +498,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("game:start", ({ roomId, lookCount }) => {
+  socket.on("game:start", ({ roomId, lookCount, gameLength }) => {
     try {
       const room = getRoomOrThrow(roomId);
       if (room.hostId !== socket.id) return;
@@ -455,9 +507,12 @@ io.on("connection", (socket) => {
       if (room.players.length < 1) return;
       room.totals = {};
       room.dealerIndex = 0;
+      room.roundNumber = 1;
+      room.gameLength = cleanGameLength(gameLength) ?? room.gameLength ?? DEFAULT_GAME_LENGTH;
       clearDutchWindow(room, roomId);
       room.game = freshGameState(room, lc);
-      io.to(roomId).emit("log", `Game started! Each player may peek ${lc} card(s).`);
+      const len = room.gameLength;
+      io.to(roomId).emit("log", `Game started (${len.mode === "rounds" ? `${len.rounds} round${len.rounds === 1 ? "" : "s"}` : `first to ${len.target} points`})! Each player may peek ${lc} card(s).`);
       broadcastRoom(roomId);
     } catch (e) { emitError(socket.id, e.message); }
   });
@@ -473,6 +528,7 @@ io.on("connection", (socket) => {
       const lc = lookCount === undefined ? room.game.lookCount : Number(lookCount);
       if (![0, 1, 2, 3, 4].includes(lc)) return;
       room.dealerIndex = nextDealerIndex;
+      room.roundNumber = (room.roundNumber ?? 1) + 1;
       clearDutchWindow(room, roomId);
       room.game = freshGameState(room, lc);
       io.to(roomId).emit("log", `New round! ${room.players[room.dealerIndex]?.name} is dealer and chose ${lc} peek card(s).`);
