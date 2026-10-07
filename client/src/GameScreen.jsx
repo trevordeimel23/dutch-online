@@ -182,8 +182,8 @@ export default function GameScreen({ c }) {
   } else if (c.inDutchWindow) {
     dockRow = (
       <>
-        <Pill tone="accent">{c.dutchWindowSecondsLeft}s</Pill>
-        <Btn variant="danger" hint={room.tutorial && c.coach?.action?.type === "dutch"} onClick={() => c.emit("dutch:call")}>🔔 Call Dutch</Btn>
+        <div className="dock__text"><b>Call Dutch?</b> Window closes in <b>{c.dutchWindowSecondsLeft}s</b></div>
+        <Btn variant="danger" hint={room.tutorial && c.coach?.action?.type === "dutch"} onClick={() => c.emit("dutch:call")}>Call Dutch</Btn>
         <Btn variant="secondary" hint={room.tutorial && c.coach?.action?.type === "pass"} onClick={() => c.emit("turn:end")}>Pass</Btn>
         {matchBtn}
       </>

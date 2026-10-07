@@ -256,13 +256,19 @@ b { font-weight: 650; }
   transition: border-color var(--t-med), box-shadow var(--t-med);
 }
 .dock--turn { border-color: var(--accent); animation: dockGlow 1.6s ease-in-out infinite; }
-.dock__row { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--btn-h); }
-.dock__row .btn { flex: 1 1 0; min-width: 0; padding: 0 var(--sp-3); overflow: hidden; text-overflow: ellipsis; }
+.dock__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--btn-h); }
+.dock__row .btn { flex: 1 1 0; min-width: max-content; padding: 0 var(--sp-3); }
 @container (max-width: 340px) {
-  .dock__row { gap: var(--sp-1); flex-wrap: wrap; }
-  .dock__row .btn { flex: 1 1 30%; font-size: var(--fs-sm); padding: 0 var(--sp-2); }
+  .dock__row { gap: var(--sp-1); }
+  .dock__row .btn { font-size: var(--fs-sm); padding: 0 var(--sp-2); }
 }
-.dock__text { flex: 1 1 auto; min-width: 0; font-size: var(--fs-sm); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* Wide docks (desktop): message and buttons share one row */
+@container (min-width: 560px) {
+  .dock__row { flex-wrap: nowrap; }
+  .dock__text { flex: 1 1 auto; }
+  .dock__row .btn { flex: 1 1 0; }
+}
+.dock__text { flex: 1 1 100%; min-width: 0; font-size: var(--fs-sm); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .dock__text b { color: var(--text); }
 .dock__row .btn--match { flex: 0 0 auto; }
 .coach {
